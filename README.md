@@ -19,6 +19,9 @@ by uploading a fully processed RDS file and allowing the user to chat away! Feat
 - Download generated plots and tables
 - GPT memory is preserved per tab (chat, plot, sheet)
 
+🎥 **Demo Video**  
+[![Watch the demo](https://img.youtube.com/vi/lzN_ecFBbzU/0.jpg)](https://www.youtube.com/watch?v=lzN_ecFBbzU)
+
 ---
 
 ## Project Structure
