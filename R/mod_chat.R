@@ -6,49 +6,70 @@
 
 # Utility JS — injected once in UI
 chat_scroll_js <- tags$script(HTML("
+  // Auto-scroll: on first call, set up a MutationObserver so any DOM change inside
+  // the container (Shiny re-render, JS injection) scrolls to bottom automatically.
+  var chatScrollObserverReady = false;
   Shiny.addCustomMessageHandler('scroll_chat', function(id) {
     var el = document.getElementById(id);
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    if (!chatScrollObserverReady) {
+      chatScrollObserverReady = true;
+      new MutationObserver(function() {
+        el.scrollTop = el.scrollHeight;
+      }).observe(el, { childList: true, subtree: true });
+    }
   });
 
-  // Remove the JS-injected typing bubble when the server response arrives
-  Shiny.addCustomMessageHandler('remove_typing_indicator', function(dummy) {
-    var el = document.getElementById('js_typing_bubble');
-    if (el) el.parentNode.removeChild(el);
+  // Remove both JS-injected bubbles when the server response renders
+  Shiny.addCustomMessageHandler('remove_js_chat_bubbles', function(dummy) {
+    ['js_user_bubble', 'js_typing_bubble'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.parentNode.removeChild(el);
+    });
   });
 "));
 
 chatUI <- function(id) {
   ns <- NS(id)
 
-  # Enter-to-send: capture text, clear, fire trigger, show typing dots immediately in DOM.
-  # Typing dots are injected via JS so they appear before Shiny's reactive cycle flushes.
+  # Enter-to-send: capture text, clear, fire trigger, then inject user bubble + typing
+  # dots directly into the DOM — Shiny only flushes after the blocking API call returns,
+  # so we can't rely on renderUI or reactive state for any of this immediate feedback.
   enter_to_send_js <- tags$script(HTML(sprintf("
     $(document).on('keydown', '#%s', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         var query = $(this).val().trim();
         if (query.length === 0) return;
+        // Guard against double-send without greying/disabling the textarea
+        if (document.getElementById('js_typing_bubble')) return;
         $(this).val('');
         Shiny.setInputValue('%s', query, {priority: 'event'});
 
-        // Remove any leftover typing bubble from a previous send
-        var old = document.getElementById('js_typing_bubble');
-        if (old) old.parentNode.removeChild(old);
-
-        // Inject typing indicator directly into the chat container right now —
-        // cannot use renderUI for this because Shiny only flushes after the
-        // entire observer (including the blocking API call) returns.
         var container = document.getElementById('%s');
         if (container) {
-          var bubble = document.createElement('div');
-          bubble.id = 'js_typing_bubble';
-          bubble.className = 'chat-bubble-row assistant-row';
-          bubble.innerHTML =
+          // 1. Inject user bubble immediately
+          var escaped = query
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\\n/g, '<br>');
+          var userBubble = document.createElement('div');
+          userBubble.id = 'js_user_bubble';
+          userBubble.className = 'chat-bubble-row user-row';
+          userBubble.innerHTML = '<div class=\"chat-bubble user-bubble\">' + escaped + '</div>';
+          container.appendChild(userBubble);
+
+          // 2. Inject typing dots immediately after
+          var typing = document.createElement('div');
+          typing.id = 'js_typing_bubble';
+          typing.className = 'chat-bubble-row assistant-row';
+          typing.innerHTML =
             '<div class=\"chat-bubble assistant-bubble typing-bubble\">' +
             '<div class=\"typing-indicator\"><span></span><span></span><span></span></div>' +
             '</div>';
-          container.appendChild(bubble);
+          container.appendChild(typing);
           container.scrollTop = container.scrollHeight;
         }
       }
@@ -102,8 +123,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       query <- trimws(input$send_trigger)
       req(nchar(query) > 0)
 
-      # 1. Disable textarea to prevent double-send while waiting for GPT
-      shinyjs::disable(ns("chat_input"))
+      # 1. Double-send is guarded in JS (checks for js_typing_bubble existence)
 
       # 2. Snapshot current conversation history before sending
       curr_api_msgs <- api_messages()
@@ -127,9 +147,8 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Re-enable input; remove the JS-injected typing bubble
-      shinyjs::enable(ns("chat_input"))
-      session$sendCustomMessage("remove_typing_indicator", TRUE)
+      # 5. Remove JS-injected user bubble + typing dots now that Shiny will render the real content
+      session$sendCustomMessage("remove_js_chat_bubbles", TRUE)
       req(gpt_result)
 
       # 6. Route by response type
