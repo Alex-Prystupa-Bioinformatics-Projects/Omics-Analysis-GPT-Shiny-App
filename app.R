@@ -279,6 +279,12 @@ $(document).ready(function() {
       $(document).on('mousemove.hresize', function(e) {
         if (!isHResizing) return;
         var newW = Math.max(220, Math.min(700, startW + (e.clientX - startX)));
+        // Drive grid columns directly — more reliable than CSS variable
+        layout.style.gridTemplateColumns = newW + 'px 1fr';
+        // Also override sidebar element width in case bslib has an inline style
+        sidebar.style.width    = newW + 'px';
+        sidebar.style.maxWidth = newW + 'px';
+        // Keep CSS var in sync so handle position (calc) still tracks correctly
         layout.style.setProperty('--bslib-sidebar-width', newW + 'px');
       });
 
