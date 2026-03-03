@@ -138,21 +138,12 @@ app_css <- "
   /* ---- Input row ---- */
   .chat-input-row {
     margin-top: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
   }
 
   .chat-input-row textarea {
     font-size: 0.88rem;
     resize: none;
     border-radius: 10px;
-  }
-
-  .chat-send-btn {
-    align-self: flex-end;
-    border-radius: 20px;
-    padding: 5px 18px;
   }
 
   /* ---- Upload area ---- */

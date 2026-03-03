@@ -15,15 +15,18 @@ chat_scroll_js <- tags$script(HTML("
 chatUI <- function(id) {
   ns <- NS(id)
 
-  # Enter-to-send: Enter submits, Shift+Enter inserts newline
+  # Enter-to-send: capture text, clear immediately, fire query as trigger value
   enter_to_send_js <- tags$script(HTML(sprintf("
     $(document).on('keydown', '#%s', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        $('#%s').click();
+        var query = $(this).val().trim();
+        if (query.length === 0) return;
+        $(this).val('');
+        Shiny.setInputValue('%s', query, {priority: 'event'});
       }
     });
-  ", ns("chat_input"), ns("send_btn"))))
+  ", ns("chat_input"), ns("send_trigger"))))
 
   tagList(
     chat_scroll_js,
@@ -48,11 +51,6 @@ chatUI <- function(id) {
         placeholder = "Ask about your data... (Enter to send, Shift+Enter for newline)",
         rows        = 2,
         width       = "100%"
-      ),
-      actionButton(
-        ns("send_btn"),
-        label = tagList(icon("paper-plane"), " Send"),
-        class = "btn btn-primary btn-sm chat-send-btn"
       )
     )
   )
@@ -73,14 +71,13 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     sheet_code      <- reactiveVal(NULL)
 
     # ---- Send handler ----
-    observeEvent(input$send_btn, {
-      req(input$chat_input, seu_obj())
-      query <- trimws(input$chat_input)
+    # input$send_trigger carries the query text (set by JS before clearing the textarea)
+    observeEvent(input$send_trigger, {
+      req(seu_obj())
+      query <- trimws(input$send_trigger)
       req(nchar(query) > 0)
 
-      # 1. Lock UI and show thinking state
-      shinyjs::disable(ns("send_btn"))
-      updateTextAreaInput(session, "chat_input", value = "")
+      # 1. Show thinking state
       is_thinking(TRUE)
 
       # 2. Snapshot current conversation history before sending
@@ -105,9 +102,8 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Re-enable UI
+      # 5. Clear thinking state
       is_thinking(FALSE)
-      shinyjs::enable(ns("send_btn"))
       req(gpt_result)
 
       # 6. Route by response type
