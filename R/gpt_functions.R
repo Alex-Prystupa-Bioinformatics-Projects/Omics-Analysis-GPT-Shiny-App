@@ -47,6 +47,7 @@ get_system_prompt <- function(seu_obj, memory) {
     "The JSON must have exactly these fields:",
     '  "type": one of "chat", "plot", or "sheet"',
     '  "message": your response in plain text (2-3 sentences max — answer only what was asked, no unsolicited lists)',
+    '  "title": a 3-5 word descriptive label for the plot (only for "plot" type, e.g. "UMAP by Cluster"; omit for chat/sheet)',
     '  "code": R code string (only include this field for "plot" or "sheet" types; omit entirely for "chat")',
     "",
     "Rules for type selection:",
@@ -126,11 +127,12 @@ chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj,
 eval_seu_gpt_query <- function(seu_obj, gpt_out) {
   if (nchar(trimws(gpt_out)) == 0) stop("GPT output is empty.")
   eval_env <- list2env(list(seu_obj = seu_obj), parent = globalenv())
-  tryCatch(
-    eval(parse(text = gpt_out), envir = eval_env),
-    error = function(e) {
-      cat("Eval error:", e$message, "\n")
-      NULL
-    }
-  )
+  tryCatch({
+    eval(parse(text = gpt_out), envir = eval_env)
+    # Explicitly return the plot object so renderPlot can print it
+    if (exists("plot", envir = eval_env)) get("plot", envir = eval_env)
+  }, error = function(e) {
+    cat("Eval error:", e$message, "\n")
+    NULL
+  })
 }

@@ -10,12 +10,24 @@ chat_scroll_js <- tags$script(HTML("
     var el = document.getElementById(id);
     if (el) el.scrollTop = el.scrollHeight;
   });
-"))
+"));
 
 chatUI <- function(id) {
   ns <- NS(id)
+
+  # Enter-to-send: Enter submits, Shift+Enter inserts newline
+  enter_to_send_js <- tags$script(HTML(sprintf("
+    $(document).on('keydown', '#%s', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        $('#%s').click();
+      }
+    });
+  ", ns("chat_input"), ns("send_btn"))))
+
   tagList(
     chat_scroll_js,
+    enter_to_send_js,
 
     # Chat history container
     div(
@@ -33,7 +45,7 @@ chatUI <- function(id) {
       textAreaInput(
         ns("chat_input"),
         label       = NULL,
-        placeholder = "Ask about your data...",
+        placeholder = "Ask about your data... (Enter to send, Shift+Enter for newline)",
         rows        = 2,
         width       = "100%"
       ),
@@ -54,6 +66,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     chat_history <- reactiveVal(list(user_query = list(), query_response = list()))
     is_thinking  <- reactiveVal(FALSE)
     plot_code    <- reactiveVal(NULL)
+    plot_title   <- reactiveVal(NULL)
     sheet_code   <- reactiveVal(NULL)
 
     # ---- Send handler ----
@@ -103,6 +116,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
 
       if (type == "plot" && nchar(trimws(code)) > 0) {
         plot_code(code)
+        plot_title(gpt_result$title %||% "")
       } else if (type == "sheet" && nchar(trimws(code)) > 0) {
         sheet_code(code)
       }
@@ -187,7 +201,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     })
 
     # ---- Return reactives to app.R ----
-    return(list(plot_code = plot_code, sheet_code = sheet_code))
+    return(list(plot_code = plot_code, plot_title = plot_title, sheet_code = sheet_code))
   })
 }
 

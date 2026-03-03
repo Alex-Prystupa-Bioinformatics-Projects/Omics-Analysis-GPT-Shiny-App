@@ -60,7 +60,7 @@ app_css <- "
     width: 100%;
   }
 
-  .user-row   { justify-content: flex-end; }
+  .user-row      { justify-content: flex-end; }
   .assistant-row { justify-content: flex-start; }
 
   .chat-bubble {
@@ -87,9 +87,7 @@ app_css <- "
   .assistant-bubble p { margin: 0; }
 
   /* ---- Collapsible code block ---- */
-  .code-details {
-    margin-top: 8px;
-  }
+  .code-details { margin-top: 8px; }
 
   .code-summary {
     cursor: pointer;
@@ -113,9 +111,7 @@ app_css <- "
   }
 
   /* ---- Typing indicator ---- */
-  .typing-bubble {
-    padding: 12px 16px;
-  }
+  .typing-bubble { padding: 12px 16px; }
 
   .typing-indicator {
     display: flex;
@@ -166,10 +162,56 @@ app_css <- "
     margin-bottom: 2px;
   }
 
-  /* ---- Output cards ---- */
-  .output-card {
-    border-radius: 12px;
+  /* ---- Main panel layout ---- */
+  .main-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    height: calc(100vh - 68px);
+    overflow: hidden;
   }
+
+  #plot_card {
+    flex: 0 0 460px;
+    min-height: 180px;
+    overflow: hidden;
+  }
+
+  #table_card {
+    flex: 1 1 0;
+    min-height: 120px;
+    overflow: auto;
+  }
+
+  /* ---- Vertical panel resizer ---- */
+  #panel-resizer {
+    flex: 0 0 6px;
+    background: transparent;
+    cursor: row-resize;
+    border-radius: 3px;
+    transition: background 0.15s;
+    margin: 2px 0;
+  }
+
+  #panel-resizer:hover { background: #4361ee55; }
+
+  /* ---- Sidebar horizontal resizer ---- */
+  .sidebar-resize-handle {
+    position: absolute;
+    right: -4px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 200;
+    transition: background 0.15s;
+  }
+
+  .sidebar-resize-handle:hover,
+  .sidebar-resize-handle.dragging { background: #4361ee55; }
+
+  .bslib-sidebar-layout { position: relative; }
 
   /* ---- Download bar ---- */
   .download-bar {
@@ -177,14 +219,90 @@ app_css <- "
     gap: 10px;
     flex-wrap: wrap;
     align-items: center;
-    padding: 8px 0 4px;
   }
 
   .download-bar label {
     font-size: 0.82rem;
     color: #aaa;
+    margin-bottom: 0;
+  }
+
+  .download-bar .form-select {
+    font-size: 0.82rem;
+    padding: 2px 6px;
+    height: auto;
   }
 "
+
+# ============================================================
+# Drag-resize JavaScript
+# ============================================================
+resize_js <- tags$script(HTML("
+$(document).ready(function() {
+
+  // ---- 1. Sidebar horizontal resize ----
+  var layout = document.querySelector('.bslib-sidebar-layout');
+  if (layout) {
+    var hHandle = $('<div class=\"sidebar-resize-handle\"></div>');
+    $(layout).append(hHandle);
+
+    var isHResizing = false, startX, startW;
+
+    hHandle.on('mousedown', function(e) {
+      isHResizing = true;
+      startX = e.clientX;
+      startW = $(layout).find('.bslib-sidebar').outerWidth();
+      hHandle.addClass('dragging');
+      $('body').css('user-select', 'none');
+      e.preventDefault();
+    });
+
+    $(document).on('mousemove.hresize', function(e) {
+      if (!isHResizing) return;
+      var newW = Math.max(220, Math.min(700, startW + (e.clientX - startX)));
+      layout.style.setProperty('--bslib-sidebar-width', newW + 'px');
+    });
+
+    $(document).on('mouseup.hresize', function() {
+      if (!isHResizing) return;
+      isHResizing = false;
+      hHandle.removeClass('dragging');
+      $('body').css('user-select', '');
+    });
+  }
+
+  // ---- 2. Vertical plot/table resize ----
+  var vHandle   = document.getElementById('panel-resizer');
+  var plotCard  = document.getElementById('plot_card');
+  var tableCard = document.getElementById('table_card');
+
+  if (vHandle && plotCard && tableCard) {
+    var isVResizing = false, startY, startH;
+
+    $(vHandle).on('mousedown', function(e) {
+      if ($(plotCard).is(':hidden')) return;
+      isVResizing = true;
+      startY = e.clientY;
+      startH = $(plotCard).outerHeight();
+      $('body').css('user-select', 'none');
+      e.preventDefault();
+    });
+
+    $(document).on('mousemove.vresize', function(e) {
+      if (!isVResizing) return;
+      var newH = Math.max(180, startH + (e.clientY - startY));
+      plotCard.style.flex = '0 0 ' + newH + 'px';
+    });
+
+    $(document).on('mouseup.vresize', function() {
+      if (!isVResizing) return;
+      isVResizing = false;
+      $('body').css('user-select', '');
+    });
+  }
+
+});
+"))
 
 # ============================================================
 # UI
@@ -194,47 +312,66 @@ ui <- page_sidebar(
   theme  = app_theme,
   tags$style(HTML(app_css)),
   useShinyjs(),
+  resize_js,
 
   # ---- Left sidebar ----
   sidebar = sidebar(
     width = 370,
     open  = TRUE,
 
-    # RDS uploader
     div(class = "upload-label", "Seurat RDS Object"),
-    fileInput(
-      "rds_file",
-      label  = NULL,
-      accept = ".rds",
-      width  = "100%"
-    ),
+    fileInput("rds_file", label = NULL, accept = ".rds", width = "100%"),
 
     hr(style = "border-color: #444; margin: 8px 0;"),
 
-    # Chat module
     chatUI("chat")
   ),
 
   # ---- Main panel ----
+  div(
+    class = "main-panels",
 
-  # Plot output (hidden until a plot is generated)
-  uiOutput("plot_section_ui"),
-
-  # Table output
-  card(
-    class      = "output-card",
-    full_screen = TRUE,
-    card_header(
-      div(
-        style = "display:flex; justify-content:space-between; align-items:center;",
-        span("Data Table"),
-        uiOutput("table_controls_ui")
+    # Plot card — hidden until first plot is generated
+    shinyjs::hidden(
+      card(
+        id         = "plot_card",
+        full_screen = TRUE,
+        card_header(
+          div(
+            style = "display:flex; justify-content:space-between; align-items:center;",
+            textOutput("plot_title_text", inline = TRUE),
+            div(
+              class = "download-bar",
+              selectInput("image_height", NULL, choices = 1:20, selected = 8,  width = "70px"),
+              selectInput("image_width",  NULL, choices = 1:20, selected = 12, width = "70px"),
+              downloadButton("download_plot_pdf", "PDF", class = "btn-sm")
+            )
+          )
+        ),
+        card_body(padding = 0,
+          plotOutput("scPlot", height = "100%")
+        )
       )
     ),
-    card_body(
-      div(
-        style = "overflow-x:auto;",
-        DT::DTOutput("csv_table")
+
+    # Vertical drag handle — hidden until plot appears
+    shinyjs::hidden(
+      div(id = "panel-resizer")
+    ),
+
+    # Table card — always visible
+    card(
+      id         = "table_card",
+      full_screen = TRUE,
+      card_header(
+        div(
+          style = "display:flex; justify-content:space-between; align-items:center;",
+          span("Data Table"),
+          uiOutput("table_controls_ui")
+        )
+      ),
+      card_body(
+        div(style = "overflow-x:auto;", DT::DTOutput("csv_table"))
       )
     )
   )
@@ -245,18 +382,16 @@ ui <- page_sidebar(
 # ============================================================
 server <- function(input, output, session) {
 
-  # ---- Seurat object reactive ----
+  # ---- Seurat object ----
   seu_obj <- reactive({
     req(input$rds_file)
     readRDS(input$rds_file$datapath)
   })
 
-  # ---- Generated data frames ----
-  reactive_df_list <- reactiveVal(list())
-
-  # ---- Latest code strings (for download re-eval) ----
+  # ---- State ----
+  reactive_df_list  <- reactiveVal(list())
   latest_plot_code  <- reactiveVal(NULL)
-  latest_sheet_code <- reactiveVal(NULL)
+  latest_plot_title <- reactiveVal("")
 
   # ============================================================
   # 1. Chat module
@@ -267,53 +402,38 @@ server <- function(input, output, session) {
   # 2. Plot rendering
   # ============================================================
   observeEvent(chat_out$plot_code(), {
+    req(chat_out$plot_code())
     latest_plot_code(chat_out$plot_code())
+    latest_plot_title(chat_out$plot_title() %||% "")
+    shinyjs::show("plot_card")
+    shinyjs::show("panel-resizer")
   })
 
-  output$plot_section_ui <- renderUI({
-    req(latest_plot_code())
-    card(
-      class      = "output-card",
-      full_screen = TRUE,
-      card_header(
-        div(
-          style = "display:flex; justify-content:space-between; align-items:center;",
-          span("Generated Plot"),
-          div(
-            class = "download-bar",
-            column(4, selectInput("image_height", "H", choices = 1:20, selected = 8, width = "80px")),
-            column(4, selectInput("image_width",  "W", choices = 1:20, selected = 12, width = "80px")),
-            column(4, downloadButton("download_plot_pdf", "PDF", class = "btn-sm"))
-          )
-        )
-      ),
-      card_body(
-        plotOutput("scPlot", height = "450px")
-      )
-    )
-  })
+  output$plot_title_text <- renderText({ latest_plot_title() })
 
   output$scPlot <- renderPlot({
     req(latest_plot_code(), seu_obj())
-    tryCatch(
-      eval_seu_gpt_query(seu_obj(), latest_plot_code()),
-      error = function(e) {
-        ggplot() +
-          annotate("text", x = 0.5, y = 0.5,
-                   label = paste("Plot error:\n", e$message),
-                   size = 5, color = "red", hjust = 0.5) +
-          theme_void()
-      }
-    )
+    tryCatch({
+      p <- eval_seu_gpt_query(seu_obj(), latest_plot_code())
+      if (!is.null(p)) print(p)
+    }, error = function(e) {
+      ggplot() +
+        annotate("text", x = 0.5, y = 0.5,
+                 label = paste("Plot error:\n", e$message),
+                 size = 5, color = "red", hjust = 0.5) +
+        theme_void()
+    })
   })
 
   output$download_plot_pdf <- downloadHandler(
-    filename = function() "plot.pdf",
-    content  = function(file) {
+    filename = function() {
+      title <- latest_plot_title()
+      if (nchar(trimws(title)) == 0) return("plot.pdf")
+      paste0(gsub("[^a-zA-Z0-9]+", "_", tolower(trimws(title))), ".pdf")
+    },
+    content = function(file) {
       p <- eval_seu_gpt_query(seu_obj(), latest_plot_code())
-      pdf(file,
-          height = as.numeric(input$image_height),
-          width  = as.numeric(input$image_width))
+      pdf(file, height = as.numeric(input$image_height), width = as.numeric(input$image_width))
       print(p)
       dev.off()
     }
@@ -324,9 +444,8 @@ server <- function(input, output, session) {
   # ============================================================
   observeEvent(chat_out$sheet_code(), {
     req(seu_obj())
-    latest_sheet_code(chat_out$sheet_code())
-    code      <- chat_out$sheet_code()
-    eval_env  <- list2env(list(seu_obj = seu_obj()), parent = globalenv())
+    code     <- chat_out$sheet_code()
+    eval_env <- list2env(list(seu_obj = seu_obj()), parent = globalenv())
 
     tryCatch(
       eval(parse(text = code), envir = eval_env),
@@ -345,14 +464,10 @@ server <- function(input, output, session) {
   })
 
   # ============================================================
-  # 4. Table controls UI (selector + download)
+  # 4. Table controls
   # ============================================================
   output$table_controls_ui <- renderUI({
-    choices <- if (length(reactive_df_list()) > 0) {
-      c("MetaData", names(reactive_df_list()))
-    } else {
-      "MetaData"
-    }
+    choices <- if (length(reactive_df_list()) > 0) c("MetaData", names(reactive_df_list())) else "MetaData"
     div(
       class = "download-bar",
       selectInput("selectDataTable", NULL, choices = choices, width = "160px"),
@@ -370,7 +485,6 @@ server <- function(input, output, session) {
 
   observeEvent(input$selectDataTable, {
     selected <- input$selectDataTable
-
     if (selected == "MetaData") {
       output$csv_table <- DT::renderDT({
         DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
@@ -392,12 +506,8 @@ server <- function(input, output, session) {
     filename = function() paste0(input$selectDataTable, ".csv"),
     content  = function(file) {
       selected <- input$selectDataTable
-      data_out <- if (selected == "MetaData") {
-        seu_obj()@meta.data
-      } else {
-        reactive_df_list()[[selected]] %||% data.frame()
-      }
-      write.csv(data_out, file, row.names = TRUE)
+      data_out <- if (selected == "MetaData") seu_obj()@meta.data else reactive_df_list()[[selected]]
+      write.csv(data_out %||% data.frame(), file, row.names = TRUE)
     }
   )
 }
