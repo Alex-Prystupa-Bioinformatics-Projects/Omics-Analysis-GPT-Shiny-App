@@ -192,9 +192,11 @@ app_css <- "
   #panel-resizer:hover { background: #4361ee55; }
 
   /* ---- Sidebar horizontal resizer ---- */
+  /* Handle lives on .bslib-sidebar-layout (not .sidebar), so it isn't clipped.
+     left uses the same CSS var that JS sets on drag — handle auto-tracks boundary. */
   .sidebar-resize-handle {
     position: absolute;
-    right: -4px;
+    left: calc(var(--bslib-sidebar-width, 370px) - 4px);
     top: 0;
     bottom: 0;
     width: 8px;
@@ -259,9 +261,9 @@ $(document).ready(function() {
     );
 
     if (sidebar) {
-      $(sidebar).css('position', 'relative');
+      // Append to layout (not sidebar) — sidebar has overflow:hidden which clips the handle
       var hHandle = $('<div class=\"sidebar-resize-handle\"></div>');
-      $(sidebar).append(hHandle);
+      $(layout).append(hHandle);
 
       var isHResizing = false, startX, startW;
 

@@ -116,8 +116,43 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       code <- gpt_result$code    %||% ""
 
       if (type == "plot" && nchar(trimws(code)) > 0) {
-        plot_code(code)
-        plot_title(gpt_result$title %||% "")
+
+        # 6a. Eagerly eval plot code — catch runtime errors before touching plot history
+        eval_result <- tryCatch({
+          eval_env <- list2env(list(seu_obj = seu_obj()), parent = globalenv())
+          eval(parse(text = code), envir = eval_env)
+          if (exists("plot", envir = eval_env)) get("plot", envir = eval_env) else TRUE
+        }, error = function(e) simpleError(e$message))
+
+        if (inherits(eval_result, "error")) {
+          # 6b. Eval failed — ask GPT to explain; no blank plot added to history
+          error_api_msgs <- c(
+            curr_api_msgs,
+            list(list(role = "user",      content = query)),
+            list(list(role = "assistant", content = as.character(jsonlite::toJSON(gpt_result, auto_unbox = TRUE))))
+          )
+          gpt_result <- tryCatch({
+            chatgpt_seu_query(
+              prompt       = paste0("The code you generated failed with this error: ",
+                                    eval_result$message,
+                                    ". Explain what went wrong and what the user would need to do differently."),
+              api_key      = api_key,
+              org_id       = org_id,
+              seu_obj      = seu_obj(),
+              api_messages = error_api_msgs
+            )
+          }, error = function(e) {
+            list(type = "chat", message = paste("Eval error:", eval_result$message))
+          })
+          msg  <- gpt_result$message %||% ""
+          type <- "chat"
+          code <- ""
+        } else {
+          # 6c. Eval succeeded — expose to app.R which appends to plot history
+          plot_code(code)
+          plot_title(gpt_result$title %||% "")
+        }
+
       } else if (type == "sheet" && nchar(trimws(code)) > 0) {
         sheet_code(code)
       }
