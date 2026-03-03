@@ -1,165 +1,136 @@
-# Add Meta Data Structure to System Prompt
+# ============================================================
+# Metadata summary for system prompt
+# ============================================================
 meta_data_str <- function(seu_obj) {
-  meta <- seu_obj@meta.data
-
+  meta   <- seu_obj@meta.data
   header <- sprintf("'data.frame':\t%d obs. of  %d variables:", nrow(meta), ncol(meta))
 
   output <- sapply(names(meta), function(colname) {
     col <- meta[[colname]]
-
     if (is.factor(col)) {
       levels_str <- paste(levels(col), collapse = ", ")
       sprintf(" $ %s: factor (%s)", colname, levels_str)
-
     } else if (is.numeric(col) || is.integer(col)) {
-      col_summary <- summary(col)
+      s <- summary(col)
       sprintf(" $ %s: %s (min=%.2f, median=%.2f, mean=%.2f, max=%.2f)",
-              colname,
-              class(col)[1],
-              col_summary["Min."],
-              col_summary["Median"],
-              col_summary["Mean"],
-              col_summary["Max."])
-
+              colname, class(col)[1], s["Min."], s["Median"], s["Mean"], s["Max."])
     } else {
       sprintf(" $ %s: %s", colname, class(col)[1])
     }
   }, USE.NAMES = FALSE)
 
-  full_output <- paste(c(header, output), collapse = "\n")
-
-  return(full_output)
+  paste(c(header, output), collapse = "\n")
 }
 
-# Add Memory to System Prompt
+# ============================================================
+# Conversation memory formatter
+# ============================================================
 get_system_memory_prompt <- function(memory_list) {
+  if (length(memory_list$user_query) == 0) return("")
   output <- character(length(memory_list$user_query))
-
   for (i in seq_along(memory_list$user_query)) {
     question <- memory_list$user_query[[i]]
-
-    if (length(memory_list$query_response) >= i) {
-      response <- memory_list$query_response[[i]]
-    } else {
-      response <- "<No response yet>"
-    }
-
+    response <- if (length(memory_list$query_response) >= i) memory_list$query_response[[i]] else "<No response yet>"
     output[i] <- glue("Q{i}: {question}\nA{i}: {response}\n")
   }
-
-  return(paste(output, collapse = "\n\n"))
+  paste(output, collapse = "\n\n")
 }
 
+# ============================================================
+# Unified system prompt
+# ============================================================
+get_system_prompt <- function(seu_obj, memory) {
 
-# System Prompt Function
-get_system_prompt <- function(seu_obj, role, memory) {
+  unified_prompt <- paste(
+    "You are a concise bioinformatics expert assistant specializing in single-cell, spatial, and multiome analysis using Seurat in R.",
+    "Always respond with a single valid JSON object — no markdown, no text outside the JSON.",
+    "The JSON must have exactly these fields:",
+    '  "type": one of "chat", "plot", or "sheet"',
+    '  "message": your response in plain text (2-3 sentences max — answer only what was asked, no unsolicited lists)',
+    '  "code": R code string (only include this field for "plot" or "sheet" types; omit entirely for "chat")',
+    "",
+    "Rules for type selection:",
+    '  - "chat": questions, clarifications, interpretation — no code output needed',
+    '  - "plot": user wants a visualization; assign a ggplot/Seurat plot object to `plot`',
+    '  - "sheet": user wants tabular data (DE genes, summaries, etc.); assign a named list of data frames to `generated_df_list`',
+    "",
+    "Rules for code:",
+    "  - Seurat object is always `seu_obj`",
+    "  - No markdown code fences (no ```R or ```)",
+    "  - Do not print or display results — only assign them",
+    "  - For DE: always set Idents first and always include test.use = 'wilcox'",
+    "",
+    "Rules for message:",
+    "  - Never include R code in message",
+    "  - Be direct — say what you did or what you know, nothing more",
+    "  - If off-topic, briefly redirect to bioinformatics",
+    sep = "\n"
+  )
 
-  if (role == "coder_plot") {
-    binf_system_prompt <- paste(
-      "You are a bioinformatics assistant designed to help me create visualizations from Seurat objects in R.",
-      "I will provide you with information about the Seurat object, including its features, samples, assays, dimensional reductions, and metadata.",
-      "Use this information to help me generate visual plots such as UMAPs, feature plots, violin plots, and other Seurat-compatible visualizations.",
-      "Return only R code. Do not include any markdown code block markers like ```R or ```.",
-      "The name of the Seurat object to use for code is always `seu_obj`.",
-      "Return only the R code necessary to generate the plot—no commentary or explanation.",
-      "Always return a ggplot or Seurat plot object named `plot`.",
-      sep = "\n"
-    )
-  }
-
-  if (role == "coder_sheet") {
-    binf_system_prompt <- paste(
-      "You are a bioinformatics assistant designed to help me generate data tables or results from Seurat objects in R.",
-      "I will provide you with information about the Seurat object, including its features, samples, assays, dimensional reductions, and metadata.",
-      "Use this information to help me perform tasks like identifying differentially expressed genes or generating tabular summaries.",
-      "Return only R code. Do not include any markdown code block markers like ```R or ```.",
-      "The name of the Seurat object to use for code is always `seu_obj`.",
-      "Return only the R code necessary to generate the data frame(s)—no commentary or explanation.",
-      "If running Differentially Expressed Genes, always have the first line set the Idents of the Seurat object, and ALWAYS include test.use = 'wilcox' as a parameter.",
-      "If the user asks to subset or split the object before doing DE analysis, perform that step first before setting the Idents.",
-      "If the user is asking for something that clearly requires multiple data frames (e.g., by condition, cluster, or comparison), generate a named list of data frames.",
-      "Each element of this list must be a data frame and should be named meaningfully (e.g., by group or label).",
-      "If you combine results from different groups into one data frame, include a new column that identifies the group each row came from.",
-      "If the output includes `pct.1` and `pct.2`, rename these to reflect the actual group names if known (e.g., 'healthy', 'disease').",
-      "The resulting output must always be stored in a named list called `generated_df_list`.",
-      "Do not print, display, or summarize the data frames—just generate and assign them.",
-      sep = "\n"
-    )
-  }
-
-  if (role == "assistant") {
-    binf_system_prompt <- paste(
-      "You are a bioinformatics assistant designed to help me explore and understand Seurat objects in R.",
-      "You will never provide R code in your responses.",
-      "Instead, your role is to help me think through the structure, quality, and potential analyses of single-cell RNA-seq data stored in Seurat objects.",
-      "This data may also be single cell multiome or spatial, you must infer that",
-      "You may suggest types of plots, QC strategies, dimensionality reduction techniques, clustering approaches, or interpretation tips.",
-      "Your goal is to provide clear, helpful, and thoughtful explanations and suggestions, without executing or proposing specific code.",
-      "The name of the Seurat object in context is always `seu_obj`, and you may reference it when discussing what's inside it.",
-      "Maintain a professional, collaborative tone and guide me in reasoning through my analysis questions.",
-      "If they ask a very off topic question, steer the user back to bioinformatics",
-      sep = "\n"
-    )
-  }
-
-  seu_summary_string <- paste(
+  seu_summary <- paste(
     "Seurat object summary:",
-    paste("Meta Data Structure:", meta_data_str(seu_obj), sep = " "),
-    paste("Assays available:", paste(names(seu_obj@assays), collapse = ", "), sep = " "),
-    paste("Active Assay:", seu_obj@active.assay, sep = " "),
-    paste("Dimensional reductions:", paste(names(seu_obj@reductions), collapse = ", "), sep = " "),
-    paste("Previous User Q/A:", get_system_memory_prompt(memory)),
+    paste("Metadata:", meta_data_str(seu_obj)),
+    paste("Assays:", paste(names(seu_obj@assays), collapse = ", ")),
+    paste("Active assay:", seu_obj@active.assay),
+    paste("Reductions:", paste(names(seu_obj@reductions), collapse = ", ")),
+    paste("Previous conversation:\n", get_system_memory_prompt(memory)),
     sep = "\n"
   )
 
-  system_prompt <- paste(
-    binf_system_prompt,
-    seu_summary_string,
-    sep = "\n"
-  )
-
-  cat(system_prompt)
-  return(system_prompt)
+  paste(unified_prompt, seu_summary, sep = "\n\n")
 }
 
-# GENERATE QUERY
-chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj, role, memory = "") {
+# ============================================================
+# Parse GPT JSON response — fallback to raw chat if malformed
+# ============================================================
+parse_gpt_response <- function(raw) {
+  tryCatch(
+    jsonlite::fromJSON(raw),
+    error = function(e) list(type = "chat", message = raw, code = NULL)
+  )
+}
 
-  system_prompt <- get_system_prompt(seu_obj = seu_obj, role = role, memory = memory)
+# ============================================================
+# OpenAI API call
+# ============================================================
+chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj,
+                               memory = list(user_query = list(), query_response = list())) {
+
+  system_prompt <- get_system_prompt(seu_obj = seu_obj, memory = memory)
 
   res <- POST(
     url = "https://api.openai.com/v1/chat/completions",
     add_headers(
-      Authorization = paste("Bearer", api_key),
-      `Content-Type` = "application/json",
+      Authorization         = paste("Bearer", api_key),
+      `Content-Type`        = "application/json",
       `OpenAI-Organization` = org_id
     ),
     body = toJSON(list(
-      model = "gpt-5-mini",
-      messages = list(
+      model           = "gpt-5-mini",
+      response_format = list(type = "json_object"),
+      messages        = list(
         list(role = "system", content = system_prompt),
-        list(role = "user", content = prompt)
+        list(role = "user",   content = prompt)
       )
     ), auto_unbox = TRUE)
   )
 
   parsed <- content(res, as = "parsed", encoding = "UTF-8")
-  return(parsed$choices[[1]]$message$content)
+  raw    <- parsed$choices[[1]]$message$content
+  parse_gpt_response(raw)
 }
 
-# EVAL QUERY
+# ============================================================
+# Eval helper — execute GPT-generated R code with seu_obj in scope
+# ============================================================
 eval_seu_gpt_query <- function(seu_obj, gpt_out) {
-  cat("Executing the following code:\n", gpt_out, "\n")
-
-  if (nchar(gpt_out) == 0) {
-    stop("Error: GPT output is empty. No code to execute.")
-  }
-
-  tryCatch({
-    result <- eval(parse(text = gpt_out))
-    return(result)
-  }, error = function(e) {
-    cat("Error occurred while executing GPT output: ", e$message, "\n")
-    return(NULL)
-  })
+  if (nchar(trimws(gpt_out)) == 0) stop("GPT output is empty.")
+  eval_env <- list2env(list(seu_obj = seu_obj), parent = globalenv())
+  tryCatch(
+    eval(parse(text = gpt_out), envir = eval_env),
+    error = function(e) {
+      cat("Eval error:", e$message, "\n")
+      NULL
+    }
+  )
 }
