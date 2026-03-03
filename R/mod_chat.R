@@ -1,7 +1,7 @@
 # ============================================================
 # Unified Chat Module
 # Handles all interaction types: conversational, plot, sheet.
-# Returns list(plot_code, sheet_code) reactives to app.R.
+# Returns list(plot_code, sheet_code, plot_title) reactives to app.R.
 # ============================================================
 
 # Auto-scroll JS — injected once in UI
@@ -63,11 +63,14 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     ns <- session$ns
 
     # ---- State ----
-    chat_history <- reactiveVal(list(user_query = list(), query_response = list()))
-    is_thinking  <- reactiveVal(FALSE)
-    plot_code    <- reactiveVal(NULL)
-    plot_title   <- reactiveVal(NULL)
-    sheet_code   <- reactiveVal(NULL)
+    # api_messages: completed turns in OpenAI {role, content} format
+    # display_history: list of {user_msg, parsed} for UI rendering
+    api_messages    <- reactiveVal(list())
+    display_history <- reactiveVal(list())
+    is_thinking     <- reactiveVal(FALSE)
+    plot_code       <- reactiveVal(NULL)
+    plot_title      <- reactiveVal(NULL)
+    sheet_code      <- reactiveVal(NULL)
 
     # ---- Send handler ----
     observeEvent(input$send_btn, {
@@ -80,24 +83,22 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       updateTextAreaInput(session, "chat_input", value = "")
       is_thinking(TRUE)
 
-      # 2. Append user message to history immediately
-      hist <- chat_history()
-      chat_history(list(
-        user_query     = append(hist$user_query, query),
-        query_response = hist$query_response
-      ))
+      # 2. Snapshot current conversation history before sending
+      curr_api_msgs <- api_messages()
 
-      # 3. Scroll to bottom after user message
+      # 3. Append user message to display immediately (parsed = NULL until response)
+      disp <- display_history()
+      display_history(append(disp, list(list(user_msg = query, parsed = NULL))))
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
 
-      # 4. Call GPT
+      # 4. Call GPT with conversation history
       gpt_result <- tryCatch({
         chatgpt_seu_query(
-          prompt  = query,
-          api_key = api_key,
-          org_id  = org_id,
-          seu_obj = seu_obj(),
-          memory  = hist
+          prompt      = query,
+          api_key     = api_key,
+          org_id      = org_id,
+          seu_obj     = seu_obj(),
+          api_messages = curr_api_msgs
         )
       }, error = function(e) {
         showNotification(paste("API error:", e$message), type = "error", duration = 8)
@@ -121,40 +122,42 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         sheet_code(code)
       }
 
-      # 7. Store assistant response (message + code + type) as a list
-      response_entry <- list(type = type, message = msg, code = code)
-
-      hist2 <- chat_history()
-      chat_history(list(
-        user_query     = hist2$user_query,
-        query_response = append(hist2$query_response, list(response_entry))
+      # 7. Append completed user + assistant turns to api_messages
+      raw_response <- jsonlite::toJSON(gpt_result, auto_unbox = TRUE)
+      api_messages(c(
+        curr_api_msgs,
+        list(list(role = "user",      content = query)),
+        list(list(role = "assistant", content = as.character(raw_response)))
       ))
 
-      # 8. Scroll to bottom after response
+      # 8. Update display history — fill in parsed result for the last entry
+      disp2 <- display_history()
+      disp2[[length(disp2)]] <- list(user_msg = query, parsed = gpt_result)
+      display_history(disp2)
+
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
     })
 
     # ---- Render chat history ----
     output$chat_history_ui <- renderUI({
-      history <- chat_history()
-      n_queries   <- length(history$user_query)
-      n_responses <- length(history$query_response)
+      history <- display_history()
 
-      if (n_queries == 0) {
+      if (length(history) == 0) {
         return(div(class = "chat-empty", "Upload a Seurat object and start asking questions."))
       }
 
-      bubbles <- lapply(seq_len(n_queries), function(i) {
+      bubbles <- lapply(history, function(entry) {
         user_bubble <- div(
           class = "chat-bubble-row user-row",
-          div(class = "chat-bubble user-bubble", history$user_query[[i]])
+          div(class = "chat-bubble user-bubble", entry$user_msg)
         )
 
-        if (i > n_responses) {
+        # Still waiting for response
+        if (is.null(entry$parsed)) {
           return(user_bubble)
         }
 
-        resp <- history$query_response[[i]]
+        resp <- entry$parsed
         type <- resp$type    %||% "chat"
         msg  <- resp$message %||% ""
         code <- resp$code    %||% ""

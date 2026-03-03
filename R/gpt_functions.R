@@ -23,23 +23,9 @@ meta_data_str <- function(seu_obj) {
 }
 
 # ============================================================
-# Conversation memory formatter
+# System prompt — Seurat object context only (no memory text)
 # ============================================================
-get_system_memory_prompt <- function(memory_list) {
-  if (length(memory_list$user_query) == 0) return("")
-  output <- character(length(memory_list$user_query))
-  for (i in seq_along(memory_list$user_query)) {
-    question <- memory_list$user_query[[i]]
-    response <- if (length(memory_list$query_response) >= i) memory_list$query_response[[i]] else "<No response yet>"
-    output[i] <- glue("Q{i}: {question}\nA{i}: {response}\n")
-  }
-  paste(output, collapse = "\n\n")
-}
-
-# ============================================================
-# Unified system prompt
-# ============================================================
-get_system_prompt <- function(seu_obj, memory) {
+get_system_prompt <- function(seu_obj) {
 
   unified_prompt <- paste(
     "You are a concise bioinformatics expert assistant specializing in single-cell, spatial, and multiome analysis using Seurat in R.",
@@ -74,7 +60,6 @@ get_system_prompt <- function(seu_obj, memory) {
     paste("Assays:", paste(names(seu_obj@assays), collapse = ", ")),
     paste("Active assay:", seu_obj@active.assay),
     paste("Reductions:", paste(names(seu_obj@reductions), collapse = ", ")),
-    paste("Previous conversation:\n", get_system_memory_prompt(memory)),
     sep = "\n"
   )
 
@@ -92,13 +77,22 @@ parse_gpt_response <- function(raw) {
 }
 
 # ============================================================
-# OpenAI API call
+# OpenAI API call — multi-turn messages format
 # ============================================================
 chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj,
-                               memory = list(user_query = list(), query_response = list())) {
+                               api_messages = list()) {
 
-  system_prompt <- get_system_prompt(seu_obj = seu_obj, memory = memory)
+  # 1. Build system prompt (Seurat context only)
+  system_prompt <- get_system_prompt(seu_obj = seu_obj)
 
+  # 2. Assemble full messages array: system + history + new user turn
+  messages <- c(
+    list(list(role = "system", content = system_prompt)),
+    api_messages,
+    list(list(role = "user", content = prompt))
+  )
+
+  # 3. Call OpenAI API
   res <- POST(
     url = "https://api.openai.com/v1/chat/completions",
     add_headers(
@@ -109,13 +103,11 @@ chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj,
     body = toJSON(list(
       model           = "gpt-5-mini",
       response_format = list(type = "json_object"),
-      messages        = list(
-        list(role = "system", content = system_prompt),
-        list(role = "user",   content = prompt)
-      )
+      messages        = messages
     ), auto_unbox = TRUE)
   )
 
+  # 4. Parse and return response
   parsed <- content(res, as = "parsed", encoding = "UTF-8")
   raw    <- parsed$choices[[1]]$message$content
   parse_gpt_response(raw)

@@ -167,25 +167,21 @@ app_css <- "
     display: flex;
     flex-direction: column;
     gap: 0;
-    height: calc(100vh - 68px);
-    overflow: hidden;
   }
 
   #plot_card {
-    flex: 0 0 460px;
+    height: 460px;
     min-height: 180px;
     overflow: hidden;
   }
 
   #table_card {
-    flex: 1 1 0;
-    min-height: 120px;
-    overflow: auto;
+    min-height: 200px;
   }
 
   /* ---- Vertical panel resizer ---- */
   #panel-resizer {
-    flex: 0 0 6px;
+    height: 6px;
     background: transparent;
     cursor: row-resize;
     border-radius: 3px;
@@ -212,6 +208,19 @@ app_css <- "
   .sidebar-resize-handle.dragging { background: #4361ee55; }
 
   .bslib-sidebar-layout { position: relative; }
+
+  /* ---- Plot nav controls ---- */
+  .plot-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .plot-nav-label {
+    font-size: 0.88rem;
+    min-width: 140px;
+    text-align: center;
+  }
 
   /* ---- Download bar ---- */
   .download-bar {
@@ -241,35 +250,44 @@ resize_js <- tags$script(HTML("
 $(document).ready(function() {
 
   // ---- 1. Sidebar horizontal resize ----
-  var layout = document.querySelector('.bslib-sidebar-layout');
-  if (layout) {
-    var hHandle = $('<div class=\"sidebar-resize-handle\"></div>');
-    $(layout).append(hHandle);
+  // Wrapped in setTimeout so bslib has time to render its layout DOM
+  setTimeout(function() {
+    var layout  = document.querySelector('.bslib-sidebar-layout');
+    var sidebar = layout && (
+      layout.querySelector('.bslib-sidebar') ||
+      layout.querySelector('.sidebar')
+    );
 
-    var isHResizing = false, startX, startW;
+    if (sidebar) {
+      $(sidebar).css('position', 'relative');
+      var hHandle = $('<div class=\"sidebar-resize-handle\"></div>');
+      $(sidebar).append(hHandle);
 
-    hHandle.on('mousedown', function(e) {
-      isHResizing = true;
-      startX = e.clientX;
-      startW = $(layout).find('.bslib-sidebar').outerWidth();
-      hHandle.addClass('dragging');
-      $('body').css('user-select', 'none');
-      e.preventDefault();
-    });
+      var isHResizing = false, startX, startW;
 
-    $(document).on('mousemove.hresize', function(e) {
-      if (!isHResizing) return;
-      var newW = Math.max(220, Math.min(700, startW + (e.clientX - startX)));
-      layout.style.setProperty('--bslib-sidebar-width', newW + 'px');
-    });
+      hHandle.on('mousedown', function(e) {
+        isHResizing = true;
+        startX = e.clientX;
+        startW = $(sidebar).outerWidth();
+        hHandle.addClass('dragging');
+        $('body').css('user-select', 'none');
+        e.preventDefault();
+      });
 
-    $(document).on('mouseup.hresize', function() {
-      if (!isHResizing) return;
-      isHResizing = false;
-      hHandle.removeClass('dragging');
-      $('body').css('user-select', '');
-    });
-  }
+      $(document).on('mousemove.hresize', function(e) {
+        if (!isHResizing) return;
+        var newW = Math.max(220, Math.min(700, startW + (e.clientX - startX)));
+        layout.style.setProperty('--bslib-sidebar-width', newW + 'px');
+      });
+
+      $(document).on('mouseup.hresize', function() {
+        if (!isHResizing) return;
+        isHResizing = false;
+        hHandle.removeClass('dragging');
+        $('body').css('user-select', '');
+      });
+    }
+  }, 200);
 
   // ---- 2. Vertical plot/table resize ----
   var vHandle   = document.getElementById('panel-resizer');
@@ -291,7 +309,7 @@ $(document).ready(function() {
     $(document).on('mousemove.vresize', function(e) {
       if (!isVResizing) return;
       var newH = Math.max(180, startH + (e.clientY - startY));
-      plotCard.style.flex = '0 0 ' + newH + 'px';
+      $(plotCard).css('height', newH + 'px');
     });
 
     $(document).on('mouseup.vresize', function() {
@@ -334,12 +352,19 @@ ui <- page_sidebar(
     # Plot card — hidden until first plot is generated
     shinyjs::hidden(
       card(
-        id         = "plot_card",
+        id          = "plot_card",
         full_screen = TRUE,
         card_header(
           div(
             style = "display:flex; justify-content:space-between; align-items:center;",
-            textOutput("plot_title_text", inline = TRUE),
+            # Navigation controls: prev | "Title (i/n)" | next
+            div(
+              class = "plot-nav",
+              actionButton("prev_plot", icon("chevron-left"),  class = "btn btn-sm btn-secondary"),
+              div(class = "plot-nav-label", textOutput("plot_nav_label", inline = TRUE)),
+              actionButton("next_plot", icon("chevron-right"), class = "btn btn-sm btn-secondary")
+            ),
+            # Download controls
             div(
               class = "download-bar",
               selectInput("image_height", NULL, choices = 1:20, selected = 8,  width = "70px"),
@@ -361,7 +386,7 @@ ui <- page_sidebar(
 
     # Table card — always visible
     card(
-      id         = "table_card",
+      id          = "table_card",
       full_screen = TRUE,
       card_header(
         div(
@@ -389,9 +414,11 @@ server <- function(input, output, session) {
   })
 
   # ---- State ----
-  reactive_df_list  <- reactiveVal(list())
-  latest_plot_code  <- reactiveVal(NULL)
-  latest_plot_title <- reactiveVal("")
+  reactive_df_list <- reactiveVal(list())
+
+  # Plot history: list of list(code, title); index: current position (1-based)
+  plot_history <- reactiveVal(list())
+  plot_index   <- reactiveVal(0L)
 
   # ============================================================
   # 1. Chat module
@@ -399,22 +426,41 @@ server <- function(input, output, session) {
   chat_out <- chatServer("chat", seu_obj, api_key, org_id)
 
   # ============================================================
-  # 2. Plot rendering
+  # 2. Plot history management
   # ============================================================
   observeEvent(chat_out$plot_code(), {
     req(chat_out$plot_code())
-    latest_plot_code(chat_out$plot_code())
-    latest_plot_title(chat_out$plot_title() %||% "")
+    new_entry <- list(code = chat_out$plot_code(), title = chat_out$plot_title() %||% "")
+    updated   <- append(plot_history(), list(new_entry))
+    plot_history(updated)
+    plot_index(length(updated))
     shinyjs::show("plot_card")
     shinyjs::show("panel-resizer")
   })
 
-  output$plot_title_text <- renderText({ latest_plot_title() })
+  observeEvent(input$prev_plot, {
+    i <- plot_index()
+    if (i > 1L) plot_index(i - 1L)
+  })
+
+  observeEvent(input$next_plot, {
+    i <- plot_index()
+    if (i < length(plot_history())) plot_index(i + 1L)
+  })
+
+  output$plot_nav_label <- renderText({
+    hist <- plot_history()
+    i    <- plot_index()
+    if (length(hist) == 0 || i == 0L) return("")
+    paste0(hist[[i]]$title, " (", i, "/", length(hist), ")")
+  })
 
   output$scPlot <- renderPlot({
-    req(latest_plot_code(), seu_obj())
+    hist <- plot_history()
+    i    <- plot_index()
+    req(length(hist) > 0, i > 0L, i <= length(hist), seu_obj())
     tryCatch({
-      p <- eval_seu_gpt_query(seu_obj(), latest_plot_code())
+      p <- eval_seu_gpt_query(seu_obj(), hist[[i]]$code)
       if (!is.null(p)) print(p)
     }, error = function(e) {
       ggplot() +
@@ -427,12 +473,18 @@ server <- function(input, output, session) {
 
   output$download_plot_pdf <- downloadHandler(
     filename = function() {
-      title <- latest_plot_title()
+      hist <- plot_history()
+      i    <- plot_index()
+      if (length(hist) == 0 || i == 0L) return("plot.pdf")
+      title <- hist[[i]]$title
       if (nchar(trimws(title)) == 0) return("plot.pdf")
       paste0(gsub("[^a-zA-Z0-9]+", "_", tolower(trimws(title))), ".pdf")
     },
     content = function(file) {
-      p <- eval_seu_gpt_query(seu_obj(), latest_plot_code())
+      hist <- plot_history()
+      i    <- plot_index()
+      req(length(hist) > 0, i > 0L)
+      p <- eval_seu_gpt_query(seu_obj(), hist[[i]]$code)
       pdf(file, height = as.numeric(input$image_height), width = as.numeric(input$image_width))
       print(p)
       dev.off()
