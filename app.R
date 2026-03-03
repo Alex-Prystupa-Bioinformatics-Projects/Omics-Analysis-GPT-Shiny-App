@@ -37,9 +37,28 @@ app_theme <- bs_theme(
 )
 
 app_css <- "
-  /* ---- Chat container ---- */
+  /* ---- Sidebar content: flex column so chat module fills remaining space ---- */
+  .bslib-sidebar-layout .sidebar-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* ---- Chat module: grows to fill leftover sidebar height ---- */
+  .chat-module {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ---- Chat history: scrollable, expands to fill module ---- */
   .chat-container {
-    height: 420px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 10px 4px;
     display: flex;
@@ -135,9 +154,10 @@ app_css <- "
     40%           { transform: scale(1.0); opacity: 1.0; }
   }
 
-  /* ---- Input row ---- */
+  /* ---- Input row: pinned to bottom of chat module ---- */
   .chat-input-row {
-    margin-top: 8px;
+    flex-shrink: 0;
+    padding-top: 8px;
   }
 
   .chat-input-row textarea {
@@ -187,7 +207,7 @@ app_css <- "
      left uses the same CSS var that JS sets on drag — handle auto-tracks boundary. */
   .sidebar-resize-handle {
     position: absolute;
-    left: calc(var(--bslib-sidebar-width, 555px) - 4px);
+    left: calc(var(--bslib-sidebar-width, 700px) - 4px);
     top: 0;
     bottom: 0;
     width: 8px;
@@ -202,7 +222,7 @@ app_css <- "
 
   .bslib-sidebar-layout { position: relative; }
 
-  /* ---- Plot nav controls ---- */
+  /* ---- Plot/table nav controls ---- */
   .plot-nav {
     display: flex;
     align-items: center;
@@ -213,26 +233,6 @@ app_css <- "
     font-size: 0.88rem;
     min-width: 140px;
     text-align: center;
-  }
-
-  /* ---- Download bar ---- */
-  .download-bar {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .download-bar label {
-    font-size: 0.82rem;
-    color: #aaa;
-    margin-bottom: 0;
-  }
-
-  .download-bar .form-select {
-    font-size: 0.82rem;
-    padding: 2px 6px;
-    height: auto;
   }
 "
 
@@ -333,7 +333,7 @@ ui <- page_sidebar(
 
   # ---- Left sidebar ----
   sidebar = sidebar(
-    width = 555,
+    width = 700,
     open  = TRUE,
 
     div(class = "upload-label", "Seurat RDS Object"),
@@ -356,20 +356,16 @@ ui <- page_sidebar(
         card_header(
           div(
             style = "display:flex; justify-content:space-between; align-items:center;",
-            # Navigation controls: prev | "Title (i/n)" | next
+            # Navigation: prev | "Title (i/n)" | next
             div(
               class = "plot-nav",
               actionButton("prev_plot", icon("chevron-left"),  class = "btn btn-sm btn-secondary"),
               div(class = "plot-nav-label", textOutput("plot_nav_label", inline = TRUE)),
               actionButton("next_plot", icon("chevron-right"), class = "btn btn-sm btn-secondary")
             ),
-            # Download controls
-            div(
-              class = "download-bar",
-              selectInput("image_height", NULL, choices = 1:20, selected = 8,  width = "70px"),
-              selectInput("image_width",  NULL, choices = 1:20, selected = 12, width = "70px"),
-              downloadButton("download_plot_pdf", "PDF", class = "btn-sm")
-            )
+            # PDF button — opens size modal before downloading
+            actionButton("show_pdf_modal", tagList(icon("download"), " PDF"),
+                         class = "btn btn-sm btn-secondary")
           )
         ),
         card_body(padding = 0,
@@ -383,15 +379,20 @@ ui <- page_sidebar(
       div(id = "panel-resizer")
     ),
 
-    # Table card — always visible
+    # Table card — arrow navigation between MetaData and generated data frames
     card(
       id          = "table_card",
       full_screen = TRUE,
       card_header(
         div(
           style = "display:flex; justify-content:space-between; align-items:center;",
-          span("Data Table"),
-          uiOutput("table_controls_ui")
+          div(
+            class = "plot-nav",
+            actionButton("prev_table", icon("chevron-left"),  class = "btn btn-sm btn-secondary"),
+            div(class = "plot-nav-label", textOutput("table_nav_label", inline = TRUE)),
+            actionButton("next_table", icon("chevron-right"), class = "btn btn-sm btn-secondary")
+          ),
+          downloadButton("download_csv", "CSV", class = "btn-sm")
         )
       ),
       card_body(
@@ -418,6 +419,13 @@ server <- function(input, output, session) {
   # Plot history: list of list(code, title); index: current position (1-based)
   plot_history <- reactiveVal(list())
   plot_index   <- reactiveVal(0L)
+
+  # Table navigation: choices always starts with MetaData, then any generated dfs
+  table_index   <- reactiveVal(1L)
+  table_choices <- reactive({
+    dfs <- reactive_df_list()
+    if (length(dfs) > 0) c("MetaData", names(dfs)) else "MetaData"
+  })
 
   # ============================================================
   # 1. Chat module
@@ -470,6 +478,23 @@ server <- function(input, output, session) {
     })
   })
 
+  # PDF size modal — user picks dimensions before downloading
+  observeEvent(input$show_pdf_modal, {
+    showModal(modalDialog(
+      title     = "Save Plot as PDF",
+      size      = "s",
+      easyClose = TRUE,
+      fluidRow(
+        column(6, numericInput("pdf_width",  "Width (in)",  value = 12, min = 1, max = 40, step = 1)),
+        column(6, numericInput("pdf_height", "Height (in)", value = 8,  min = 1, max = 40, step = 1))
+      ),
+      footer = tagList(
+        modalButton("Cancel"),
+        downloadButton("download_plot_pdf", "Download PDF", class = "btn-primary btn-sm")
+      )
+    ))
+  })
+
   output$download_plot_pdf <- downloadHandler(
     filename = function() {
       hist <- plot_history()
@@ -484,7 +509,9 @@ server <- function(input, output, session) {
       i    <- plot_index()
       req(length(hist) > 0, i > 0L)
       p <- eval_seu_gpt_query(seu_obj(), hist[[i]]$code)
-      pdf(file, height = as.numeric(input$image_height), width = as.numeric(input$image_width))
+      pdf(file,
+          height = as.numeric(input$pdf_height %||% 8),
+          width  = as.numeric(input$pdf_width  %||% 12))
       print(p)
       dev.off()
     }
@@ -508,55 +535,61 @@ server <- function(input, output, session) {
     if (exists("generated_df_list", envir = eval_env)) {
       df_list <- get("generated_df_list", envir = eval_env)
       reactive_df_list(df_list)
-      updateSelectInput(session, "selectDataTable",
-                        choices  = c("MetaData", names(df_list)),
-                        selected = names(df_list)[1])
+      # Jump to first generated df (index 2, since MetaData is index 1)
+      table_index(2L)
     }
   })
 
   # ============================================================
-  # 4. Table controls
+  # 4. Table navigation
   # ============================================================
-  output$table_controls_ui <- renderUI({
-    choices <- if (length(reactive_df_list()) > 0) c("MetaData", names(reactive_df_list())) else "MetaData"
-    div(
-      class = "download-bar",
-      selectInput("selectDataTable", NULL, choices = choices, width = "160px"),
-      downloadButton("download_csv", "CSV", class = "btn-sm")
-    )
+  observeEvent(input$prev_table, {
+    i <- table_index()
+    if (i > 1L) table_index(i - 1L)
+  })
+
+  observeEvent(input$next_table, {
+    i <- table_index()
+    if (i < length(table_choices())) table_index(i + 1L)
+  })
+
+  output$table_nav_label <- renderText({
+    choices <- table_choices()
+    i       <- table_index()
+    paste0(choices[i], " (", i, "/", length(choices), ")")
   })
 
   # ============================================================
   # 5. Render selected table
   # ============================================================
   output$csv_table <- DT::renderDT({
-    req(seu_obj())
-    DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
-  })
-
-  observeEvent(input$selectDataTable, {
-    selected <- input$selectDataTable
+    choices  <- table_choices()
+    i        <- table_index()
+    selected <- choices[i]
     if (selected == "MetaData") {
-      output$csv_table <- DT::renderDT({
-        DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
-      })
+      req(seu_obj())
+      DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
     } else {
-      df_list <- reactive_df_list()
-      if (!is.null(df_list[[selected]])) {
-        output$csv_table <- DT::renderDT({
-          DT::datatable(df_list[[selected]], options = list(scrollX = TRUE, pageLength = 15))
-        })
-      }
+      df <- reactive_df_list()[[selected]]
+      req(df)
+      DT::datatable(df, options = list(scrollX = TRUE, pageLength = 15))
     }
   })
 
   # ============================================================
-  # 6. CSV download
+  # 6. CSV download — filename derived from current table name, no spaces
   # ============================================================
   output$download_csv <- downloadHandler(
-    filename = function() paste0(input$selectDataTable, ".csv"),
-    content  = function(file) {
-      selected <- input$selectDataTable
+    filename = function() {
+      choices <- table_choices()
+      i       <- table_index()
+      name    <- choices[i]
+      paste0(gsub("[^a-zA-Z0-9]+", "_", tolower(trimws(name))), ".csv")
+    },
+    content = function(file) {
+      choices  <- table_choices()
+      i        <- table_index()
+      selected <- choices[i]
       data_out <- if (selected == "MetaData") seu_obj()@meta.data else reactive_df_list()[[selected]]
       write.csv(data_out %||% data.frame(), file, row.names = TRUE)
     }

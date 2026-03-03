@@ -28,21 +28,20 @@ chatUI <- function(id) {
     });
   ", ns("chat_input"), ns("send_trigger"))))
 
-  tagList(
+  # Outer div is a flex column — grows to fill leftover sidebar height after upload inputs
+  div(
+    class = "chat-module",
     chat_scroll_js,
     enter_to_send_js,
 
-    # Chat history container
+    # Scrollable chat history — grows to fill all available space
     div(
       id    = ns("chat_container"),
       class = "chat-container",
       uiOutput(ns("chat_history_ui"))
     ),
 
-    # Typing indicator (shown while waiting for response)
-    uiOutput(ns("typing_ui")),
-
-    # Input row
+    # Input pinned to bottom of the module
     div(
       class = "chat-input-row",
       textAreaInput(
@@ -77,8 +76,9 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       query <- trimws(input$send_trigger)
       req(nchar(query) > 0)
 
-      # 1. Show thinking state
+      # 1. Show thinking state; disable textarea to prevent double-send
       is_thinking(TRUE)
+      shinyjs::disable(ns("chat_input"))
 
       # 2. Snapshot current conversation history before sending
       curr_api_msgs <- api_messages()
@@ -91,10 +91,10 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       # 4. Call GPT with conversation history
       gpt_result <- tryCatch({
         chatgpt_seu_query(
-          prompt      = query,
-          api_key     = api_key,
-          org_id      = org_id,
-          seu_obj     = seu_obj(),
+          prompt       = query,
+          api_key      = api_key,
+          org_id       = org_id,
+          seu_obj      = seu_obj(),
           api_messages = curr_api_msgs
         )
       }, error = function(e) {
@@ -102,8 +102,9 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Clear thinking state
+      # 5. Clear thinking state; re-enable input
       is_thinking(FALSE)
+      shinyjs::enable(ns("chat_input"))
       req(gpt_result)
 
       # 6. Route by response type
@@ -169,11 +170,12 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
     })
 
-    # ---- Render chat history ----
+    # ---- Render chat history (typing indicator appended as last item when thinking) ----
     output$chat_history_ui <- renderUI({
-      history <- display_history()
+      history  <- display_history()
+      thinking <- is_thinking()
 
-      if (length(history) == 0) {
+      if (length(history) == 0 && !thinking) {
         return(div(class = "chat-empty", "Upload a Seurat object and start asking questions."))
       }
 
@@ -183,7 +185,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
           div(class = "chat-bubble user-bubble", entry$user_msg)
         )
 
-        # Still waiting for response
+        # Still waiting for response — show user message only
         if (is.null(entry$parsed)) {
           return(user_bubble)
         }
@@ -216,22 +218,19 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         tagList(user_bubble, assistant_bubble)
       })
 
-      do.call(tagList, bubbles)
-    })
-
-    # ---- Typing indicator ----
-    output$typing_ui <- renderUI({
-      if (!is_thinking()) return(NULL)
-      div(
-        class = "chat-bubble-row assistant-row",
-        div(
-          class = "chat-bubble assistant-bubble typing-bubble",
+      # Append animated typing dots as last chat item while waiting for GPT
+      if (thinking) {
+        typing_bubble <- div(
+          class = "chat-bubble-row assistant-row",
           div(
-            class = "typing-indicator",
-            span(), span(), span()
+            class = "chat-bubble assistant-bubble typing-bubble",
+            div(class = "typing-indicator", span(), span(), span())
           )
         )
-      )
+        bubbles <- c(bubbles, list(typing_bubble))
+      }
+
+      do.call(tagList, bubbles)
     })
 
     # ---- Return reactives to app.R ----
