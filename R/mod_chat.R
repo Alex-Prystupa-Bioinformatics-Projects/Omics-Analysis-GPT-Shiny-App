@@ -4,18 +4,25 @@
 # Returns list(plot_code, sheet_code, plot_title) reactives to app.R.
 # ============================================================
 
-# Auto-scroll JS — injected once in UI
+# Utility JS — injected once in UI
 chat_scroll_js <- tags$script(HTML("
   Shiny.addCustomMessageHandler('scroll_chat', function(id) {
     var el = document.getElementById(id);
     if (el) el.scrollTop = el.scrollHeight;
+  });
+
+  // Remove the JS-injected typing bubble when the server response arrives
+  Shiny.addCustomMessageHandler('remove_typing_indicator', function(dummy) {
+    var el = document.getElementById('js_typing_bubble');
+    if (el) el.parentNode.removeChild(el);
   });
 "));
 
 chatUI <- function(id) {
   ns <- NS(id)
 
-  # Enter-to-send: capture text, clear immediately, fire query as trigger value
+  # Enter-to-send: capture text, clear, fire trigger, show typing dots immediately in DOM.
+  # Typing dots are injected via JS so they appear before Shiny's reactive cycle flushes.
   enter_to_send_js <- tags$script(HTML(sprintf("
     $(document).on('keydown', '#%s', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -24,9 +31,29 @@ chatUI <- function(id) {
         if (query.length === 0) return;
         $(this).val('');
         Shiny.setInputValue('%s', query, {priority: 'event'});
+
+        // Remove any leftover typing bubble from a previous send
+        var old = document.getElementById('js_typing_bubble');
+        if (old) old.parentNode.removeChild(old);
+
+        // Inject typing indicator directly into the chat container right now —
+        // cannot use renderUI for this because Shiny only flushes after the
+        // entire observer (including the blocking API call) returns.
+        var container = document.getElementById('%s');
+        if (container) {
+          var bubble = document.createElement('div');
+          bubble.id = 'js_typing_bubble';
+          bubble.className = 'chat-bubble-row assistant-row';
+          bubble.innerHTML =
+            '<div class=\"chat-bubble assistant-bubble typing-bubble\">' +
+            '<div class=\"typing-indicator\"><span></span><span></span><span></span></div>' +
+            '</div>';
+          container.appendChild(bubble);
+          container.scrollTop = container.scrollHeight;
+        }
       }
     });
-  ", ns("chat_input"), ns("send_trigger"))))
+  ", ns("chat_input"), ns("send_trigger"), ns("chat_container"))))
 
   # Outer div is a flex column — grows to fill leftover sidebar height after upload inputs
   div(
@@ -64,7 +91,6 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     # display_history: list of {user_msg, parsed} for UI rendering
     api_messages    <- reactiveVal(list())
     display_history <- reactiveVal(list())
-    is_thinking     <- reactiveVal(FALSE)
     plot_code       <- reactiveVal(NULL)
     plot_title      <- reactiveVal(NULL)
     sheet_code      <- reactiveVal(NULL)
@@ -76,8 +102,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       query <- trimws(input$send_trigger)
       req(nchar(query) > 0)
 
-      # 1. Show thinking state; disable textarea to prevent double-send
-      is_thinking(TRUE)
+      # 1. Disable textarea to prevent double-send while waiting for GPT
       shinyjs::disable(ns("chat_input"))
 
       # 2. Snapshot current conversation history before sending
@@ -102,9 +127,9 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Clear thinking state; re-enable input
-      is_thinking(FALSE)
+      # 5. Re-enable input; remove the JS-injected typing bubble
       shinyjs::enable(ns("chat_input"))
+      session$sendCustomMessage("remove_typing_indicator", TRUE)
       req(gpt_result)
 
       # 6. Route by response type
@@ -170,12 +195,12 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
     })
 
-    # ---- Render chat history (typing indicator appended as last item when thinking) ----
+    # ---- Render chat history ----
+    # Typing indicator is JS-injected (see enter_to_send_js) — not rendered here.
     output$chat_history_ui <- renderUI({
-      history  <- display_history()
-      thinking <- is_thinking()
+      history <- display_history()
 
-      if (length(history) == 0 && !thinking) {
+      if (length(history) == 0) {
         return(div(class = "chat-empty", "Upload a Seurat object and start asking questions."))
       }
 
@@ -217,18 +242,6 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
 
         tagList(user_bubble, assistant_bubble)
       })
-
-      # Append animated typing dots as last chat item while waiting for GPT
-      if (thinking) {
-        typing_bubble <- div(
-          class = "chat-bubble-row assistant-row",
-          div(
-            class = "chat-bubble assistant-bubble typing-bubble",
-            div(class = "typing-indicator", span(), span(), span())
-          )
-        )
-        bubbles <- c(bubbles, list(typing_bubble))
-      }
 
       do.call(tagList, bubbles)
     })
