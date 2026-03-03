@@ -187,7 +187,7 @@ app_css <- "
      left uses the same CSS var that JS sets on drag — handle auto-tracks boundary. */
   .sidebar-resize-handle {
     position: absolute;
-    left: calc(var(--bslib-sidebar-width, 370px) - 4px);
+    left: calc(var(--bslib-sidebar-width, 555px) - 4px);
     top: 0;
     bottom: 0;
     width: 8px;
@@ -333,7 +333,7 @@ ui <- page_sidebar(
 
   # ---- Left sidebar ----
   sidebar = sidebar(
-    width = 370,
+    width = 555,
     open  = TRUE,
 
     div(class = "upload-label", "Seurat RDS Object"),
