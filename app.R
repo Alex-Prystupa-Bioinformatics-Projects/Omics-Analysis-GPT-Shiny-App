@@ -60,10 +60,13 @@ app_css <- "
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 10px 4px;
+    padding: 10px 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    background: rgba(0,0,0,0.12);
   }
 
   .chat-empty {
@@ -164,6 +167,15 @@ app_css <- "
     font-size: 0.88rem;
     resize: none;
     border-radius: 10px;
+  }
+
+  /* ---- Remove grey background from Shiny's renderUI wrapper inside chat ---- */
+  .chat-container .shiny-html-output {
+    background: transparent !important;
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: contents;
   }
 
   /* ---- Upload area ---- */
@@ -325,7 +337,7 @@ $(document).ready(function() {
 # UI
 # ============================================================
 ui <- page_sidebar(
-  title  = "Omics GPT",
+  title  = "Single Cell Multiomics Analysis Dashboard",
   theme  = app_theme,
   tags$style(HTML(app_css)),
   useShinyjs(),
