@@ -28,6 +28,29 @@ chat_scroll_js <- tags$script(HTML("
       if (el) el.parentNode.removeChild(el);
     });
   });
+
+  // Auto-send voice transcript: inject bubbles then fire send_trigger
+  Shiny.addCustomMessageHandler('auto_send', function(msg) {
+    if (document.getElementById('js_typing_bubble')) return;
+    Shiny.setInputValue(msg.send_trigger_id, msg.text, { priority: 'event' });
+    var container = document.getElementById(msg.container_id);
+    if (container) {
+      var escaped = msg.text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
+      var userBubble = document.createElement('div');
+      userBubble.id = 'js_user_bubble';
+      userBubble.className = 'chat-bubble-row user-row';
+      userBubble.innerHTML = '<div class=\"chat-bubble user-bubble\">' + escaped + '</div>';
+      container.appendChild(userBubble);
+      var typing = document.createElement('div');
+      typing.id = 'js_typing_bubble';
+      typing.className = 'chat-bubble-row assistant-row';
+      typing.innerHTML = '<div class=\"chat-bubble assistant-bubble typing-bubble\"><div class=\"typing-indicator\"><span></span><span></span><span></span></div></div>';
+      container.appendChild(typing);
+      container.scrollTop = container.scrollHeight;
+    }
+  });
 "));
 
 chatUI <- function(id) {
@@ -76,11 +99,48 @@ chatUI <- function(id) {
     });
   ", ns("chat_input"), ns("send_trigger"), ns("chat_container"))))
 
+  # MediaRecorder: hold to record, release to send — mouseup bound on document so
+  # releasing outside the button still stops recording correctly.
+  mic_js <- tags$script(HTML(sprintf("
+    (function() {
+      var mediaRecorder, audioChunks = [];
+
+      $(document).on('mousedown', '#%s', function(e) {
+        e.preventDefault();
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = function(e) { audioChunks.push(e.data); };
+          mediaRecorder.onstop = function() {
+            var blob = new Blob(audioChunks, { type: 'audio/webm' });
+            var reader = new FileReader();
+            reader.onloadend = function() {
+              var b64 = reader.result.split(',')[1];
+              Shiny.setInputValue('%s', b64, { priority: 'event' });
+            };
+            reader.readAsDataURL(blob);
+            stream.getTracks().forEach(function(t) { t.stop(); });
+          };
+          mediaRecorder.start();
+          $('#%s').addClass('recording').attr('title', 'Release to send');
+
+          $(document).one('mouseup', function() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+              mediaRecorder.stop();
+              $('#%s').removeClass('recording').attr('title', 'Hold to talk');
+            }
+          });
+        });
+      });
+    })();
+  ", ns("mic_btn"), ns("whisper_audio"), ns("mic_btn"), ns("mic_btn"))))
+
   # Outer div is a flex column — grows to fill leftover sidebar height after upload inputs
   div(
     class = "chat-module",
     chat_scroll_js,
     enter_to_send_js,
+    mic_js,
 
     # Scrollable chat history — grows to fill all available space
     div(
@@ -98,7 +158,9 @@ chatUI <- function(id) {
         placeholder = "Ask about your data... (Enter to send, Shift+Enter for newline)",
         rows        = 2,
         width       = "100%"
-      )
+      ),
+      actionButton(ns("mic_btn"), label = NULL, icon = icon("microphone"),
+                   class = "mic-btn", title = "Hold to talk")
     )
   )
 }
@@ -115,6 +177,25 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     plot_code       <- reactiveVal(NULL)
     plot_title      <- reactiveVal(NULL)
     sheet_code      <- reactiveVal(NULL)
+
+    # ---- Voice input handler ----
+    # Receives base64 webm audio, transcribes via Whisper, fires auto_send in JS
+    observeEvent(input$whisper_audio, {
+      req(input$whisper_audio)
+      transcript <- tryCatch(
+        whisper_transcribe(input$whisper_audio, api_key),
+        error = function(e) {
+          showNotification(paste("Whisper error:", e$message), type = "error", duration = 6)
+          ""
+        }
+      )
+      req(nchar(trimws(transcript)) > 0)
+      session$sendCustomMessage("auto_send", list(
+        send_trigger_id = ns("send_trigger"),
+        text            = transcript,
+        container_id    = ns("chat_container")
+      ))
+    })
 
     # ---- Send handler ----
     # input$send_trigger carries the query text (set by JS before clearing the textarea)

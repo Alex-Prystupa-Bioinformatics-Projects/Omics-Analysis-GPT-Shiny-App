@@ -161,12 +161,47 @@ app_css <- "
   .chat-input-row {
     flex-shrink: 0;
     padding-top: 8px;
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .chat-input-row .shiny-input-container {
+    flex: 1;
+    margin-bottom: 0;
   }
 
   .chat-input-row textarea {
     font-size: 0.88rem;
     resize: none;
     border-radius: 10px;
+    height: 100%;
+  }
+
+  /* ---- Mic button ---- */
+  .mic-btn {
+    flex-shrink: 0;
+    width: 38px;
+    height: auto;
+    padding: 0;
+    border-radius: 8px;
+    background: #2e3338;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #aaa;
+  }
+
+  .mic-btn:hover { color: #fff; background: #3a3f44; }
+
+  .mic-btn.recording {
+    background: #c0392b;
+    border-color: #e74c3c;
+    color: #fff;
+    animation: mic-pulse 1.2s infinite ease-in-out;
+  }
+
+  @keyframes mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+    50%       { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
   }
 
   /* ---- Remove grey background from Shiny's renderUI wrapper inside chat ---- */

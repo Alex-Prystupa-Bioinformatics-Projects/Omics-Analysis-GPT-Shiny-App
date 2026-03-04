@@ -125,6 +125,31 @@ chatgpt_seu_query <- function(prompt, api_key, org_id, seu_obj,
 }
 
 # ============================================================
+# Whisper API call — transcribe base64-encoded audio blob
+# ============================================================
+whisper_transcribe <- function(audio_b64, api_key) {
+  # 1. Decode base64 to a temp .webm file
+  tmp <- tempfile(fileext = ".webm")
+  writeBin(jsonlite::base64_dec(audio_b64), tmp)
+  on.exit(unlink(tmp))
+
+  # 2. POST to Whisper transcriptions endpoint
+  res <- POST(
+    url = "https://api.openai.com/v1/audio/transcriptions",
+    add_headers(Authorization = paste("Bearer", api_key)),
+    body = list(
+      model = "whisper-1",
+      file  = upload_file(tmp, type = "audio/webm")
+    ),
+    encode = "multipart"
+  )
+
+  # 3. Return transcript text or empty string on failure
+  parsed <- content(res, as = "parsed", encoding = "UTF-8")
+  parsed$text %||% ""
+}
+
+# ============================================================
 # Eval helper — execute GPT-generated R code with seu_obj in scope
 # ============================================================
 eval_seu_gpt_query <- function(seu_obj, gpt_out) {
