@@ -187,6 +187,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
           })
           msg  <- gpt_result$message %||% ""
           type <- "chat"
+          gpt_result$code <- code  # preserve original failed code for display
           code <- ""
         } else {
           # 6c. Eval succeeded — expose to app.R which appends to plot history
@@ -239,12 +240,13 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         msg  <- resp$message %||% ""
         code <- resp$code    %||% ""
 
-        code_block <- if (type %in% c("plot", "sheet") && nchar(trimws(code)) > 0) {
+        code_block <- if (nchar(trimws(code)) > 0) {
+          block_icon <- if (type == "sheet") "table" else "code"
           tags$details(
             class = "code-details",
             tags$summary(
               class = "code-summary",
-              icon(if (type == "plot") "chart-bar" else "table"), " View Code"
+              icon(block_icon), " View Code"
             ),
             tags$pre(class = "code-pre", code)
           )
