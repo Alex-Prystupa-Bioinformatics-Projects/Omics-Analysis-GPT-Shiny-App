@@ -1,7 +1,9 @@
+# ============================================================
+# Libraries
+# ============================================================
 library(shiny)
-library(bs4Dash)
-options(shiny.maxRequestSize = 5 * 1024^3)
-
+library(bslib)
+library(shinyjs)
 library(dplyr)
 library(tibble)
 library(ggplot2)
@@ -13,507 +15,600 @@ library(jsonlite)
 library(Seurat)
 library(presto)
 library(dotenv)
+library(DT)
 
-source("gpt-functions.R")
+options(shiny.maxRequestSize = 5 * 1024^3)
 
-# Keys
+# ============================================================
+# API Keys
+# ============================================================
 dotenv::load_dot_env(".keys")
 api_key <- Sys.getenv("API_KEY")
-org_id <- Sys.getenv("ORG_ID") 
+org_id  <- Sys.getenv("ORG_ID")
 
-# UI
-ui <- bs4DashPage(
-  title = "GPT Shiny Seurat Plotter",
-  help = NULL,
-  fullscreen = T,
-  header = bs4DashNavbar(),
-  sidebar = bs4DashSidebar(
-    collapsed = T,
-    skin = "light",
-    status = "primary",
-    title = "GPT Plotter",
-    bs4SidebarMenu(
-      bs4SidebarMenuItem("SC-Genomics Dashboard", tabName = "custom_sc", icon = icon("flask"))
-    )
-  ),
-  body = bs4DashBody(
-    bs4TabItems(
-      bs4TabItem(
-        tabName = "custom_sc",
-        fluidRow(
-          column(
-            width = 5,  # Stack these two cards vertically in this column
-            bs4Card(
-              title = "RDS Uploader",
-              width = 12,
-              collapsible = TRUE,
-              fileInput("rds_file", label = h5("Upload Seurat RDS")),
-              style = "padding-bottom: 0px;" 
-            ),
-            bs4TabCard(
-              title = NULL,
-              id = "chat_tabs",
-              width = 12,
-              collapsible = TRUE,
-              collapsed = F,
-              side = "left",
-              tabPanel(
-                title = "Bio Chat",
-                fluidRow(
-                  column(
-                    width = 9,
-                    textInput("chat_input", label = "Chat about your Seurat object", value = "")
-                  ),
-                  column(
-                    width = 3,
-                    actionButton("chat_send_btn", "Send", icon = icon("paper-plane")),
-                    style = "margin-top: 32px;"
-                  )
-                ),
-                uiOutput("chat_output")
-              ),
-              tabPanel(
-                title = "Plot Code",
-                fluidRow(
-                  column(
-                    width = 9,
-                    textInput("plot_code_input", label = "Type instructions to generate plot", value = "")
-                  ),
-                  column(
-                    width = 3,
-                    actionButton("plot_code_send_btn", "Send", icon = icon("paper-plane")),
-                    style = "margin-top: 32px;"
-                  )
-                ),
-                uiOutput("plot_code_output")
-              ),
-              tabPanel(
-                title = "Sheet Code",
-                fluidRow(
-                  column(
-                    width = 9,
-                    textInput("sheet_code_input", label = "Type instructions to generate table", value = "")
-                  ),
-                  column(
-                    width = 3,
-                    actionButton("sheet_code_send_btn", "Send", icon = icon("paper-plane")),
-                    style = "margin-top: 32px;"
-                  )
-                ),
-                uiOutput("sheet_code_output")
-              )
-            ),
-            bs4Card(
-              title = "Toggle Data Tables",
-              width = 12,
-              collapsible = TRUE,
-              collapsed = F,
-              uiOutput(outputId = "selectDataTable_UI")
-            ),
-            bs4Card(
-              title = "Save Plot",
-              width = 12,
-              collapsible = TRUE,
-              collapsed = TRUE,
-              textInput("image_name", "Image Name", value = "Plot"),
-              fluidRow(
-                column(6, selectInput("image_height", "Image Height", choices = c(rep(1:20)), selected = 8)),
-                column(6, selectInput("image_width", "Image Width", choices = c(rep(1:20)), selected = 12))
-              ),
-              downloadButton("download_plot_pdf", "Save Plot PDF")
-            )
-          ),
-          column(
-            width = 7,
-            bs4Card(
-              title = "Generated Spreadsheets",
-              width = 12,
-              collapsible = TRUE,
-              div(
-                style = "overflow-x: auto; overflow-y: auto; max-height: 400px;",  # control both width & height scroll
-                DT::DTOutput("csv_table")
-              )
-            ),
-            bs4Card(
-              title = "Generated Plots",
-              width = 12,
-              collapsible = TRUE,
-              plotOutput("scPlot", height = "400px")
-            )
-          )
-        )
-      )
-    )
-  ),
-  controlbar = bs4DashControlbar(),
-  footer = bs4DashFooter()
+# ============================================================
+# Theme & CSS
+# ============================================================
+app_theme <- bs_theme(
+  bootswatch  = "darkly",
+  primary     = "#4361ee",
+  base_font   = font_google("Inter"),
+  code_font   = font_google("JetBrains Mono")
 )
 
+app_css <- "
+  /* ---- Sidebar content: flex column so chat module fills remaining space ---- */
+  .bslib-sidebar-layout .sidebar-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* ---- Chat module: grows to fill leftover sidebar height ---- */
+  .chat-module {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ---- Chat history: scrollable, expands to fill module ---- */
+  .chat-container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    background: rgba(0,0,0,0.12);
+  }
+
+  .chat-empty {
+    color: #888;
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 40px;
+  }
+
+  /* ---- Bubbles ---- */
+  .chat-bubble-row {
+    display: flex;
+    width: 100%;
+  }
+
+  .user-row      { justify-content: flex-end; }
+  .assistant-row { justify-content: flex-start; }
+
+  .chat-bubble {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .user-bubble {
+    background: #4361ee;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+
+  .assistant-bubble {
+    background: #2e3338;
+    color: #e0e0e0;
+    border-bottom-left-radius: 4px;
+  }
+
+  .assistant-bubble p { margin: 0; }
+
+  /* ---- Collapsible code block ---- */
+  .code-details { margin-top: 8px; }
+
+  .code-summary {
+    cursor: pointer;
+    font-size: 0.78rem;
+    color: #aaa;
+    user-select: none;
+    list-style: none;
+  }
+
+  .code-summary:hover { color: #fff; }
+
+  .code-pre {
+    background: #1a1d21;
+    color: #c9d1d9;
+    font-size: 0.78rem;
+    padding: 10px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin-top: 6px;
+    white-space: pre-wrap;
+  }
+
+  /* ---- Typing indicator ---- */
+  .typing-bubble { padding: 12px 16px; }
+
+  .typing-indicator {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+  }
+
+  .typing-indicator span {
+    width: 8px;
+    height: 8px;
+    background: #888;
+    border-radius: 50%;
+    animation: typing-bounce 1.2s infinite ease-in-out;
+  }
+
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes typing-bounce {
+    0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+    40%           { transform: scale(1.0); opacity: 1.0; }
+  }
+
+  /* ---- Input row: pinned to bottom of chat module ---- */
+  .chat-input-row {
+    flex-shrink: 0;
+    padding-top: 8px;
+  }
+
+  .chat-input-row textarea {
+    font-size: 0.88rem;
+    resize: none;
+    border-radius: 10px;
+  }
+
+  /* ---- Remove grey background from Shiny's renderUI wrapper inside chat ---- */
+  .chat-container .shiny-html-output {
+    background: transparent !important;
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: contents;
+  }
+
+  /* ---- Upload area ---- */
+  .upload-label {
+    font-size: 0.8rem;
+    color: #aaa;
+    margin-bottom: 2px;
+  }
+
+  /* ---- Main panel layout ---- */
+  .main-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  #plot_card {
+    height: 460px;
+    min-height: 180px;
+    overflow: hidden;
+  }
+
+  #table_card {
+    min-height: 200px;
+  }
+
+  /* ---- Vertical panel resizer ---- */
+  #panel-resizer {
+    height: 6px;
+    background: transparent;
+    cursor: row-resize;
+    border-radius: 3px;
+    transition: background 0.15s;
+    margin: 2px 0;
+  }
+
+  #panel-resizer:hover { background: #4361ee55; }
+
+  /* ---- Sidebar horizontal resizer ---- */
+  /* Handle lives on .bslib-sidebar-layout (not .sidebar), so it isn't clipped.
+     left uses the same CSS var that JS sets on drag — handle auto-tracks boundary. */
+  .sidebar-resize-handle {
+    position: absolute;
+    left: calc(var(--bslib-sidebar-width, 700px) - 4px);
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 200;
+    transition: background 0.15s;
+  }
+
+  .sidebar-resize-handle:hover,
+  .sidebar-resize-handle.dragging { background: #4361ee55; }
+
+  .bslib-sidebar-layout { position: relative; }
+
+  /* ---- Plot/table nav controls ---- */
+  .plot-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .plot-nav-label {
+    font-size: 0.88rem;
+    min-width: 140px;
+    text-align: center;
+  }
+"
+
+# ============================================================
+# Drag-resize JavaScript
+# ============================================================
+resize_js <- tags$script(HTML("
+$(document).ready(function() {
+
+  // ---- 1. Sidebar horizontal resize ----
+  // Wrapped in setTimeout so bslib has time to render its layout DOM
+  setTimeout(function() {
+    var layout  = document.querySelector('.bslib-sidebar-layout');
+    var sidebar = layout && (
+      layout.querySelector('.bslib-sidebar') ||
+      layout.querySelector('.sidebar')
+    );
+
+    if (sidebar) {
+      // Append to layout (not sidebar) — sidebar has overflow:hidden which clips the handle
+      var hHandle = $('<div class=\"sidebar-resize-handle\"></div>');
+      $(layout).append(hHandle);
+
+      var isHResizing = false, startX, startW;
+
+      hHandle.on('mousedown', function(e) {
+        isHResizing = true;
+        startX = e.clientX;
+        startW = $(sidebar).outerWidth();
+        hHandle.addClass('dragging');
+        $('body').css('user-select', 'none');
+        e.preventDefault();
+      });
+
+      $(document).on('mousemove.hresize', function(e) {
+        if (!isHResizing) return;
+        var newW = Math.max(220, Math.min(700, startW + (e.clientX - startX)));
+        // Drive grid columns directly — more reliable than CSS variable
+        layout.style.gridTemplateColumns = newW + 'px 1fr';
+        // Also override sidebar element width in case bslib has an inline style
+        sidebar.style.width    = newW + 'px';
+        sidebar.style.maxWidth = newW + 'px';
+        // Keep CSS var in sync so handle position (calc) still tracks correctly
+        layout.style.setProperty('--bslib-sidebar-width', newW + 'px');
+      });
+
+      $(document).on('mouseup.hresize', function() {
+        if (!isHResizing) return;
+        isHResizing = false;
+        hHandle.removeClass('dragging');
+        $('body').css('user-select', '');
+      });
+    }
+  }, 200);
+
+  // ---- 2. Vertical plot/table resize ----
+  var vHandle   = document.getElementById('panel-resizer');
+  var plotCard  = document.getElementById('plot_card');
+  var tableCard = document.getElementById('table_card');
+
+  if (vHandle && plotCard && tableCard) {
+    var isVResizing = false, startY, startH;
+
+    $(vHandle).on('mousedown', function(e) {
+      if ($(plotCard).is(':hidden')) return;
+      isVResizing = true;
+      startY = e.clientY;
+      startH = $(plotCard).outerHeight();
+      $('body').css('user-select', 'none');
+      e.preventDefault();
+    });
+
+    $(document).on('mousemove.vresize', function(e) {
+      if (!isVResizing) return;
+      var newH = Math.max(180, startH + (e.clientY - startY));
+      $(plotCard).css('height', newH + 'px');
+    });
+
+    $(document).on('mouseup.vresize', function() {
+      if (!isVResizing) return;
+      isVResizing = false;
+      $('body').css('user-select', '');
+    });
+  }
+
+});
+"))
+
+# ============================================================
+# UI
+# ============================================================
+ui <- page_sidebar(
+  title  = "Single Cell Multiomics Analysis Dashboard",
+  theme  = app_theme,
+  tags$style(HTML(app_css)),
+  useShinyjs(),
+  resize_js,
+
+  # ---- Left sidebar ----
+  sidebar = sidebar(
+    width = 700,
+    open  = TRUE,
+
+    div(class = "upload-label", "Seurat RDS Object"),
+    fileInput("rds_file", label = NULL, accept = ".rds", width = "100%"),
+
+    hr(style = "border-color: #444; margin: 8px 0;"),
+
+    chatUI("chat")
+  ),
+
+  # ---- Main panel ----
+  div(
+    class = "main-panels",
+
+    # Plot card — hidden until first plot is generated
+    shinyjs::hidden(
+      card(
+        id          = "plot_card",
+        full_screen = TRUE,
+        card_header(
+          div(
+            style = "display:flex; justify-content:space-between; align-items:center;",
+            # Navigation: prev | "Title (i/n)" | next
+            div(
+              class = "plot-nav",
+              actionButton("prev_plot", icon("chevron-left"),  class = "btn btn-sm btn-secondary"),
+              div(class = "plot-nav-label", textOutput("plot_nav_label", inline = TRUE)),
+              actionButton("next_plot", icon("chevron-right"), class = "btn btn-sm btn-secondary")
+            ),
+            # PDF button — opens size modal before downloading
+            actionButton("show_pdf_modal", tagList(icon("download"), " PDF"),
+                         class = "btn btn-sm btn-secondary")
+          )
+        ),
+        card_body(padding = 0,
+          plotOutput("scPlot", height = "100%")
+        )
+      )
+    ),
+
+    # Vertical drag handle — hidden until plot appears
+    shinyjs::hidden(
+      div(id = "panel-resizer")
+    ),
+
+    # Table card — arrow navigation between MetaData and generated data frames
+    card(
+      id          = "table_card",
+      full_screen = TRUE,
+      card_header(
+        div(
+          style = "display:flex; justify-content:space-between; align-items:center;",
+          div(
+            class = "plot-nav",
+            actionButton("prev_table", icon("chevron-left"),  class = "btn btn-sm btn-secondary"),
+            div(class = "plot-nav-label", textOutput("table_nav_label", inline = TRUE)),
+            actionButton("next_table", icon("chevron-right"), class = "btn btn-sm btn-secondary")
+          ),
+          downloadButton("download_csv", "CSV", class = "btn-sm")
+        )
+      ),
+      card_body(
+        div(style = "overflow-x:auto;", DT::DTOutput("csv_table"))
+      )
+    )
+  )
+)
+
+# ============================================================
 # Server
+# ============================================================
 server <- function(input, output, session) {
-  
-  # Reactive Values
-  ## Seu obj
+
+  # ---- Seurat object ----
   seu_obj <- reactive({
     req(input$rds_file)
     readRDS(input$rds_file$datapath)
   })
-  
-  ## List of Datatables
+
+  # ---- State ----
   reactive_df_list <- reactiveVal(list())
-  
-  # Bioinformatics Chat Bot
-  # ----------------------------------------------------
-  # Reactive values
-  chat_text <- reactiveVal("")
-  chat_history <- reactiveVal(list("user_query" = list(), 
-                                   "query_response" = list()))
-  
-  # Observe send button click
-  observeEvent(input$chat_send_btn, {
-    req(input$chat_input)
-    
-    current_history <- chat_history()
-    
-    # For memory, exclude the current question and response
-    # (i.e., only pass memory from previous Q/A pairs)
-    memory_for_gpt <- current_history
-    
-    # Call GPT with memory only of previous Q/A pairs (no current question yet)
-    if (!is.null(input$rds_file)) {
-      gpt_response <- chatgpt_seu_query(
-        prompt = input$chat_input,
-        api_key = api_key,
-        seu_obj = seu_obj(),
-        org_id = org_id,
-        role = "assistant",
-        memory = memory_for_gpt
-      )
-    } else {
-      gpt_response <- "<em>Please upload a Seurat RDS file.</em>"
-    }
-    
-    # Now update chat history: append new question AND response *after* GPT call
-    current_history$user_query <- append(current_history$user_query, input$chat_input)
-    current_history$query_response <- append(current_history$query_response, gpt_response)
-    
-    # Save updated history
-    chat_history(current_history)
-    
-    # Update chat text reactive
-    chat_text(input$chat_input)
+
+  # Plot history: list of list(code, title); index: current position (1-based)
+  plot_history <- reactiveVal(list())
+  plot_index   <- reactiveVal(0L)
+
+  # Table navigation: choices always starts with MetaData, then any generated dfs
+  table_index   <- reactiveVal(1L)
+  table_choices <- reactive({
+    dfs <- reactive_df_list()
+    if (length(dfs) > 0) c("MetaData", names(dfs)) else "MetaData"
   })
-  
-  
-  # Render the chat output
-  output$chat_output <- renderUI({
-    history <- chat_history()
-    if (length(history$user_query) == 0) {
-      return(HTML("<strong>Chat:</strong><br><pre style='background:#f8f9fa;padding:10px;border-radius:5px;'># Ask questions about your analysis!</pre>"))
-    }
-    
-    chat_blocks <- mapply(function(q, r) {
-      glue::glue(
-        "<div style='margin-bottom: 15px;'>
-         <strong>You:</strong><br>
-         <div style='background:#e8f0fe;padding:10px;border-radius:5px;margin-bottom:5px;'>{q}</div>
-         <strong>Assistant:</strong><br>
-         <div style='background:#f8f9fa;padding:10px;border-radius:5px;'>{gsub('\n', '<br>', r)}</div>
-       </div>"
+
+  # ============================================================
+  # 1. Chat module
+  # ============================================================
+  chat_out <- chatServer("chat", seu_obj, api_key, org_id)
+
+  # ============================================================
+  # 2. Plot history management
+  # ============================================================
+  observeEvent(chat_out$plot_code(), {
+    req(chat_out$plot_code())
+    new_entry <- list(code = chat_out$plot_code(), title = chat_out$plot_title() %||% "")
+    updated   <- append(plot_history(), list(new_entry))
+    plot_history(updated)
+    plot_index(length(updated))
+    shinyjs::show("plot_card")
+    shinyjs::show("panel-resizer")
+  })
+
+  observeEvent(input$prev_plot, {
+    i <- plot_index()
+    if (i > 1L) plot_index(i - 1L)
+  })
+
+  observeEvent(input$next_plot, {
+    i <- plot_index()
+    if (i < length(plot_history())) plot_index(i + 1L)
+  })
+
+  output$plot_nav_label <- renderText({
+    hist <- plot_history()
+    i    <- plot_index()
+    if (length(hist) == 0 || i == 0L) return("")
+    paste0(hist[[i]]$title, " (", i, "/", length(hist), ")")
+  })
+
+  output$scPlot <- renderPlot({
+    hist <- plot_history()
+    i    <- plot_index()
+    req(length(hist) > 0, i > 0L, i <= length(hist), seu_obj())
+    tryCatch({
+      p <- eval_seu_gpt_query(seu_obj(), hist[[i]]$code)
+      if (!is.null(p)) print(p)
+    }, error = function(e) {
+      ggplot() +
+        annotate("text", x = 0.5, y = 0.5,
+                 label = paste("Plot error:\n", e$message),
+                 size = 5, color = "red", hjust = 0.5) +
+        theme_void()
+    })
+  })
+
+  # PDF size modal — user picks dimensions before downloading
+  observeEvent(input$show_pdf_modal, {
+    showModal(modalDialog(
+      title     = "Save Plot as PDF",
+      size      = "s",
+      easyClose = TRUE,
+      fluidRow(
+        column(6, numericInput("pdf_width",  "Width (in)",  value = 12, min = 1, max = 40, step = 1)),
+        column(6, numericInput("pdf_height", "Height (in)", value = 8,  min = 1, max = 40, step = 1))
+      ),
+      footer = tagList(
+        modalButton("Cancel"),
+        downloadButton("download_plot_pdf", "Download PDF", class = "btn-primary btn-sm")
       )
-    }, history$user_query, history$query_response, SIMPLIFY = FALSE)
-    
-    HTML(glue::glue(
-      "<strong>Chat:</strong><br>
-     <div style='height:300px; overflow-y:auto; padding:10px; border:1px solid #ccc; border-radius:5px; background:#ffffff;'>
-       {paste(chat_blocks, collapse = '')}
-     </div>"
     ))
   })
-  
-  # ----------------------------------------------------
-  
-  # Plot Code Chat Bot
-  # ----------------------------------------------------
-  # Reactive values
-  code_text <- reactiveVal("")
-  query_response_reactive <- reactiveVal(NULL)
-  
-  # Store full code chat history
-  code_chat_history <- reactiveVal(list(user_query = list(), query_response = list()))
-  
-  # Button triggers everything
-  observeEvent(input$plot_code_send_btn, {
-    req(input$plot_code_input, input$rds_file)
-    
-    current_code_chat_history <- code_chat_history()
-    
-    # Update the query
-    query <- input$plot_code_input
-    code_text(query)
-    
-    # Get GPT response
-    response <- chatgpt_seu_query(
-      prompt = query,
-      api_key = api_key,
-      seu_obj = seu_obj(),
-      org_id = org_id,
-      role = "coder_plot",
-      memory = current_code_chat_history
-    )
-    
-    # Save latest response for plotting
-    query_response_reactive(response)
-    
-    # Append to history
-    hist <- code_chat_history()
-    updated <- list(
-      user_query = append(hist$user_query, query),
-      query_response = append(hist$query_response, response)
-    )
-    code_chat_history(updated)
-  })
-  
-  # Scrollable code chat history
-  output$plot_code_output <- renderUI({
-    history <- code_chat_history()
-    
-    if (length(history$user_query) == 0) {
-      return(HTML("<strong>Code:</strong><br><pre style='background:#f8f9fa;padding:10px;border-radius:5px;'># Waiting for your input...</pre>"))
-    }
-    
-    chat_blocks <- mapply(function(q, r) {
-      glue::glue(
-        "<div style='margin-bottom: 15px;'>
-         <strong>You:</strong><br>
-         <div style='background:#e8f0fe;padding:10px;border-radius:5px;margin-bottom:5px;'>{q}</div>
-         <strong>Code:</strong><br>
-         <div style='background:#f8f9fa;padding:10px;border-radius:5px;white-space:pre-wrap;border:1px solid #ccc;'>{gsub('\n', '<br>', r)}</div>
-       </div>"
-      )
-    }, history$user_query, history$query_response, SIMPLIFY = FALSE)
-    
-    HTML(glue::glue(
-      "<strong>Code Chat:</strong><br>
-     <div style='height:300px; overflow-y:auto; background:#ffffff; padding:10px; border-radius:5px; border:1px solid #ddd;'>
-       {paste(chat_blocks, collapse = '')}
-     </div>"
-    ))
-  })
-  
-  # Download latest plot
+
   output$download_plot_pdf <- downloadHandler(
     filename = function() {
-      glue("{input$image_name}.pdf")
+      hist <- plot_history()
+      i    <- plot_index()
+      if (length(hist) == 0 || i == 0L) return("plot.pdf")
+      title <- hist[[i]]$title
+      if (nchar(trimws(title)) == 0) return("plot.pdf")
+      paste0(gsub("[^a-zA-Z0-9]+", "_", tolower(trimws(title))), ".pdf")
     },
     content = function(file) {
-      plot <- eval_seu_gpt_query(seu_obj(), query_response_reactive())
-      pdf(file, height = as.numeric(input$image_height), width = as.numeric(input$image_width))
-      print(plot)
+      hist <- plot_history()
+      i    <- plot_index()
+      req(length(hist) > 0, i > 0L)
+      p <- eval_seu_gpt_query(seu_obj(), hist[[i]]$code)
+      pdf(file,
+          height = as.numeric(input$pdf_height %||% 8),
+          width  = as.numeric(input$pdf_width  %||% 12))
+      print(p)
       dev.off()
     }
   )
 
-  # Use the same query_response_reactive for the plot
-  output$scPlot <- renderPlot({
-    req(query_response_reactive())  # Ensure query_response is available
-
-    if (!is.null(input$rds_file)) {
-      eval_seu_gpt_query(seu_obj(), query_response_reactive()) # Get current state of seu obj & query
-    }
-  })
-
-  # Download plot as pdf
-  output$download_plot_pdf <- downloadHandler(
-    filename = function() {glue("{input$image_name}.pdf")},
-    content = function(file) {
-      plot <- eval_seu_gpt_query(seu_obj(), query_response_reactive())
-      pdf(file, height = as.numeric(input$image_height), width = as.numeric(input$image_width))
-      print(plot)
-      dev.off()
-    }
-  )
-  
-  # Sheet Code Chat Bot
-  # ----------------------------------------------------
-  
-  # Reactive values for sheet chatbot
-  sheet_code_text <- reactiveVal("")
-  sheet_query_response_reactive <- reactiveVal(NULL)
-  
-  # Store full chat history (user + GPT)
-  sheet_code_chat_history <- reactiveVal(list(user_query = list(), query_response = list()))
-  
-  # When Send button is clicked
-  observeEvent(input$sheet_code_send_btn, {
-    req(input$sheet_code_input, input$rds_file)
-    
-    current_sheet_code_chat_history <- sheet_code_chat_history()
-    
-    query <- input$sheet_code_input
-    sheet_code_text(query)
-    
-    # Call GPT once
-    response <- chatgpt_seu_query(
-      prompt = query,
-      api_key = api_key,
-      seu_obj = seu_obj(),
-      org_id = org_id,
-      role = "coder_sheet",
-      memory = current_sheet_code_chat_history
-    )
-    
-    # Save latest response for use
-    sheet_query_response_reactive(response)
-    
-    # Add to chat history
-    hist <- sheet_code_chat_history()
-    updated <- list(
-      user_query = append(hist$user_query, query),
-      query_response = append(hist$query_response, response)
-    )
-    sheet_code_chat_history(updated)
-  })
-  
-  # Render sheet code chat UI
-  output$sheet_code_output <- renderUI({
-    history <- sheet_code_chat_history()
-    
-    if (length(history$user_query) == 0) {
-      return(HTML("<strong>Code:</strong><br><pre style='background:#f8f9fa;padding:10px;border-radius:5px;'># Waiting for your input...</pre>"))
-    }
-    
-    chat_blocks <- mapply(function(q, r) {
-      glue::glue(
-        "<div style='margin-bottom: 15px;'>
-         <strong>You:</strong><br>
-         <div style='background:#e8f0fe;padding:10px;border-radius:5px;margin-bottom:5px;'>{q}</div>
-         <strong>Code:</strong><br>
-         <div style='background:#f8f9fa;padding:10px;border-radius:5px;white-space:pre-wrap;border:1px solid #ccc;'>{gsub('\n', '<br>', r)}</div>
-       </div>"
-      )
-    }, history$user_query, history$query_response, SIMPLIFY = FALSE)
-    
-    HTML(glue::glue(
-      "<strong>Code Chat:</strong><br>
-     <div style='height:300px; overflow-y:auto; background:#ffffff; padding:10px; border-radius:5px; border:1px solid #ddd;'>
-       {paste(chat_blocks, collapse = '')}
-     </div>"
-    ))
-  })
-  
-  # Select UI (Metadata and Generated)
-  observeEvent(seu_obj(), {
-    output$selectDataTable_UI <- renderUI({
-      tagList(
-        selectInput(
-          inputId = "selectDataTable",
-          label = "Choose Table:",
-          choices = c("MetaData"),
-          selected = "MetaData"
-        ),
-        downloadButton("download_csv", "Save CSV")
-      )
-    })
-    
-    output$csv_table <- DT::renderDT({
-      DT::datatable(
-        seu_obj()@meta.data,
-        options = list(scrollX = TRUE)
-      )
-    })
-  })
-  
-  # Evaluate response and update table choices
-  observeEvent(sheet_query_response_reactive(), {
-    req(input$selectDataTable)
+  # ============================================================
+  # 3. Sheet evaluation
+  # ============================================================
+  observeEvent(chat_out$sheet_code(), {
     req(seu_obj())
-    
-    code <- sheet_query_response_reactive()
-    seu_obj_resolved <- seu_obj()
-    eval_env <- list2env(list(seu_obj = seu_obj_resolved), parent = globalenv())
-    
-    eval(parse(text = code), envir = eval_env)
-    
+    code     <- chat_out$sheet_code()
+    eval_env <- list2env(list(seu_obj = seu_obj()), parent = globalenv())
+
+    tryCatch(
+      eval(parse(text = code), envir = eval_env),
+      error = function(e) {
+        showNotification(paste("Sheet code error:", e$message), type = "error", duration = 8)
+      }
+    )
+
     if (exists("generated_df_list", envir = eval_env)) {
       df_list <- get("generated_df_list", envir = eval_env)
       reactive_df_list(df_list)
-      
-      updateSelectInput(
-        session = session,
-        inputId = "selectDataTable",
-        choices = c("MetaData", names(df_list)),
-        selected = names(df_list)[1]
-      )
-    } else {
-      reactive_df_list(NULL)
-      updateSelectInput(
-        session = session,
-        inputId = "selectDataTable",
-        choices = c("MetaData"),
-        selected = "MetaData"
-      )
+      # Jump to first generated df (index 2, since MetaData is index 1)
+      table_index(2L)
     }
   })
-  
-  # Show selected table
-  observeEvent(input$selectDataTable, {
-    selected <- input$selectDataTable
-    
+
+  # ============================================================
+  # 4. Table navigation
+  # ============================================================
+  observeEvent(input$prev_table, {
+    i <- table_index()
+    if (i > 1L) table_index(i - 1L)
+  })
+
+  observeEvent(input$next_table, {
+    i <- table_index()
+    if (i < length(table_choices())) table_index(i + 1L)
+  })
+
+  output$table_nav_label <- renderText({
+    choices <- table_choices()
+    i       <- table_index()
+    paste0(choices[i], " (", i, "/", length(choices), ")")
+  })
+
+  # ============================================================
+  # 5. Render selected table
+  # ============================================================
+  output$csv_table <- DT::renderDT({
+    choices  <- table_choices()
+    i        <- table_index()
+    selected <- choices[i]
     if (selected == "MetaData") {
-      output$csv_table <- DT::renderDT({
-        DT::datatable(
-          seu_obj()@meta.data,
-          options = list(scrollX = TRUE)
-        )
-      })
+      req(seu_obj())
+      DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
     } else {
-      df_list <- reactive_df_list()
-      
-      if (!is.null(df_list) && !is.null(df_list[[selected]])) {
-        output$csv_table <- DT::renderDT({
-          DT::datatable(
-            df_list[[selected]],
-            options = list(scrollX = TRUE)
-          )
-        })
-      } else {
-        output$csv_table <- DT::renderDT({
-          DT::datatable(data.frame())
-        })
-      }
+      df <- reactive_df_list()[[selected]]
+      req(df)
+      DT::datatable(df, options = list(scrollX = TRUE, pageLength = 15))
     }
   })
-  
-  
-  # Save CSV
-  # Download plot as pdf
+
+  # ============================================================
+  # 6. CSV download — filename derived from current table name, no spaces
+  # ============================================================
   output$download_csv <- downloadHandler(
     filename = function() {
-      paste0(input$selectDataTable, "_table.csv")
+      choices <- table_choices()
+      i       <- table_index()
+      name    <- choices[i]
+      paste0(gsub("[^a-zA-Z0-9]+", "_", tolower(trimws(name))), ".csv")
     },
     content = function(file) {
-      selected <- input$selectDataTable
-      
-      if (selected == "MetaData") {
-        data_to_save <- seu_obj()@meta.data
-      } else {
-        df_list <- reactive_df_list()
-        if (!is.null(df_list) && !is.null(df_list[[selected]])) {
-          data_to_save <- df_list[[selected]]
-        } else {
-          data_to_save <- data.frame()  # empty fallback
-        }
-      }
-      
-      write.csv(data_to_save, file, row.names = TRUE)
+      choices  <- table_choices()
+      i        <- table_index()
+      selected <- choices[i]
+      data_out <- if (selected == "MetaData") seu_obj()@meta.data else reactive_df_list()[[selected]]
+      write.csv(data_out %||% data.frame(), file, row.names = TRUE)
     }
   )
-  
-  # ----------------------------------------------------
-  
 }
 
-# Run App
+# ============================================================
+# Launch
+# ============================================================
 shinyApp(ui, server)
-

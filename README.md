@@ -1,70 +1,56 @@
-# OMICS-ANALYSIS-GPT-SHINY-APP
+# Omics-Analysis-GPT Shiny App
+
+An interactive Shiny dashboard for exploring fully processed Seurat objects using a GPT-powered chatbot. Upload your RDS file, ask questions, generate plots and tables — all in one interface.
 
 ---
 
-## Overview
+## Features
 
-**Omics-Analysis-GPT-Shiny-App**
-
-Finally, a way to get the biologist off your back for basic plots and analysis (just kidding!). This tool is designed to use GPT to help with basic analysis,
-by uploading a fully processed RDS file and allowing the user to chat away! Features include:
-
-- An interactive Shiny dashboard for uploading and exploring Seurat RDS files using GPT-4.
-- Uses bs4Dash for modern layout and responsive UI components
-- 3 different chat bots:
-  - Direct chat to ask questions about analysis and formulate some sort of analysis strategy
-  - Plot chat bot that always returns R code that plots and object
-  - Spreadsheet chat bot that always returns a list of dataframes and then presents dataframe to user (ex. run DGE markers)
-- All chat bots ingest the structure & summary of the seurat object meta data (in a custom structure function) to have way better context of the object
-- Download generated plots and tables
-- GPT memory is preserved per tab (chat, plot, sheet)
-
-🎥 **Demo Video**  
-[![Watch the demo](https://img.youtube.com/vi/lzN_ecFBbzU/0.jpg)](https://www.youtube.com/watch?v=lzN_ecFBbzU)
+- Single unified chatbot that knows when to talk, plot, or produce a data table
+- Automatically generates and renders Seurat/ggplot visualizations based on natural language prompts
+- Runs DE analysis and other tabular outputs on request
+- Collapsible code blocks so you can inspect the generated R code
+- Drag-to-resize sidebar and panel layout
+- Download plots as PDF and tables as CSV
+- Supports standard single-cell, spatial, and multiome Seurat objects
 
 ---
 
 ## Project Structure
 
-```sh
-└── Omics-Analysis-GPT-Shiny-App/
-    ├── app.R
-    └── gpt-functions.R
+```
+Omics-Analysis-GPT-Shiny-App/
+├── app.R                  # Entry point — UI, server, layout
+├── R/
+│   ├── gpt_functions.R    # OpenAI API call, system prompt, eval helper
+│   └── mod_chat.R         # Unified chat module (UI + server)
+└── .keys                  # API keys (never committed)
 ```
 
-### Project Index
+---
 
-<details open>
-	<summary><b><code>OMICS-ANALYSIS-GPT-SHINY-APP/</code></b></summary>
-	<!-- __root__ Submodule -->
-	<details>
-		<summary><b>__root__</b></summary>
-		<blockquote>
-			<div class='directory-path' style='padding: 8px 0; color: #666;'>
-				<code><b>⦿ __root__</b></code>
-			<table style='width: 100%; border-collapse: collapse;'>
-			<thead>
-				<tr style='background-color: #f8f9fa;'>
-					<th style='width: 30%; text-align: left; padding: 8px;'>File Name</th>
-					<th style='text-align: left; padding: 8px;'>Summary</th>
-				</tr>
-			</thead>
-				<tr style='border-bottom: 1px solid #eee;'>
-					<td style='padding: 8px;'><b><a href='/Users/aleksandrprystupa/Projects/Alex-BINF-Pipelines/Omics-Analysis-GPT-Shiny-App/blob/master/app.R'>app.R</a></b></td>
-					<td style='padding: 8px;'>- Create an interactive Shiny app for bioinformatics analysis<br>- Users can upload Seurat RDS files, chat with a bioinformatics assistant, generate plots and tables using GPT, and save results as PDFs or CSVs<br>- The app provides a seamless interface for data exploration and visualization in genomics research.</td>
-				</tr>
-				<tr style='border-bottom: 1px solid #eee;'>
-					<td style='padding: 8px;'><b><a href='/Users/aleksandrprystupa/Projects/Alex-BINF-Pipelines/Omics-Analysis-GPT-Shiny-App/blob/master/gpt-functions.R'>gpt-functions.R</a></b></td>
-					<td style='padding: 8px;'>- Generate comprehensive system prompts for bioinformatics tasks based on user roles, providing structured guidance for creating visualizations, data tables, or offering analysis insights<br>- Utilize functions to extract Seurat object summaries and handle user queries through an OpenAI API, ensuring seamless interaction and code evaluation within the bioinformatics context.</td>
-				</tr>
-			</table>
-		</blockquote>
-	</details>
-</details>
+## Setup
+
+1. Clone the repo
+2. Add a `.keys` file at the project root:
+   ```
+   API_KEY=your_openai_api_key
+   ORG_ID=your_openai_org_id
+   ```
+3. Install dependencies:
+   ```r
+   install.packages(c("shiny", "bslib", "shinyjs", "DT", "httr", "jsonlite",
+                       "glue", "ggplot2", "dplyr", "dotenv"))
+   # Bioconductor
+   BiocManager::install(c("Seurat", "Signac", "presto"))
+   ```
+4. Run the app:
+   ```r
+   shiny::runApp(".")
+   ```
 
 ---
 
 ## Usage
 
-Upload a fully processed RDS Object. It can be standard single cell, spatial, or multiome. Then have fun and ask away!
-As of right now you cannot ask it reprocess and save another RDS although this funcionality will hopefully be added in the future.
+Upload a fully processed Seurat RDS object (single-cell, spatial, or multiome). The chatbot ingests the object's metadata structure, assays, and reductions as context. Ask anything — it will respond conversationally, generate a plot, or produce a table depending on what you need.
