@@ -262,7 +262,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
           class = "chat-bubble-row assistant-row",
           div(
             class = "chat-bubble assistant-bubble",
-            p(msg),
+            shiny::markdown(msg),
             code_block
           )
         )
