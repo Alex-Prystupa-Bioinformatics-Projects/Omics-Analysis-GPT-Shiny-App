@@ -161,12 +161,47 @@ app_css <- "
   .chat-input-row {
     flex-shrink: 0;
     padding-top: 8px;
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .chat-input-row .shiny-input-container {
+    flex: 1;
+    margin-bottom: 0;
   }
 
   .chat-input-row textarea {
     font-size: 0.88rem;
     resize: none;
     border-radius: 10px;
+    height: 100%;
+  }
+
+  /* ---- Mic button ---- */
+  .mic-btn {
+    flex-shrink: 0;
+    width: 38px;
+    height: auto;
+    padding: 0;
+    border-radius: 8px;
+    background: #2e3338;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #aaa;
+  }
+
+  .mic-btn:hover { color: #fff; background: #3a3f44; }
+
+  .mic-btn.recording {
+    background: #c0392b;
+    border-color: #e74c3c;
+    color: #fff;
+    animation: mic-pulse 1.2s infinite ease-in-out;
+  }
+
+  @keyframes mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+    50%       { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
   }
 
   /* ---- Remove grey background from Shiny's renderUI wrapper inside chat ---- */
@@ -545,10 +580,23 @@ server <- function(input, output, session) {
     )
 
     if (exists("generated_df_list", envir = eval_env)) {
-      df_list <- get("generated_df_list", envir = eval_env)
-      reactive_df_list(df_list)
-      # Jump to first generated df (index 2, since MetaData is index 1)
-      table_index(2L)
+      new_dfs  <- get("generated_df_list", envir = eval_env)
+      existing <- reactive_df_list()
+
+      # Merge new entries into existing list — resolve name collisions with numeric suffix
+      for (nm in names(new_dfs)) {
+        candidate <- nm
+        suffix    <- 2L
+        while (candidate %in% names(existing)) {
+          candidate <- paste0(nm, "_", suffix)
+          suffix    <- suffix + 1L
+        }
+        existing[[candidate]] <- new_dfs[[nm]]
+      }
+
+      reactive_df_list(existing)
+      # Jump to the first newly added df
+      table_index(length(existing) + 1L - length(new_dfs) + 1L)
     }
   })
 
@@ -580,7 +628,7 @@ server <- function(input, output, session) {
     selected <- choices[i]
     if (selected == "MetaData") {
       req(seu_obj())
-      DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
+      DT::datatable(seu_obj()@meta.data[1:100, ], options = list(scrollX = TRUE, pageLength = 15))
     } else {
       df <- reactive_df_list()[[selected]]
       req(df)

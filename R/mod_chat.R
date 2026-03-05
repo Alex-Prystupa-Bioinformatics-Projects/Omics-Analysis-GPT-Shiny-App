@@ -28,6 +28,44 @@ chat_scroll_js <- tags$script(HTML("
       if (el) el.parentNode.removeChild(el);
     });
   });
+
+  // Auto-send voice transcript: inject bubbles then fire send_trigger
+  Shiny.addCustomMessageHandler('auto_send', function(msg) {
+    if (document.getElementById('js_typing_bubble')) return;
+    Shiny.setInputValue(msg.send_trigger_id, msg.text, { priority: 'event' });
+    var container = document.getElementById(msg.container_id);
+    if (container) {
+      var escaped = msg.text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
+      var userBubble = document.createElement('div');
+      userBubble.id = 'js_user_bubble';
+      userBubble.className = 'chat-bubble-row user-row';
+      userBubble.innerHTML = '<div class=\"chat-bubble user-bubble\">' + escaped + '</div>';
+      container.appendChild(userBubble);
+      var typing = document.createElement('div');
+      typing.id = 'js_typing_bubble';
+      typing.className = 'chat-bubble-row assistant-row';
+      typing.innerHTML = '<div class=\"chat-bubble assistant-bubble typing-bubble\"><div class=\"typing-indicator\"><span></span><span></span><span></span></div></div>';
+      container.appendChild(typing);
+      container.scrollTop = container.scrollHeight;
+
+      // One-shot MutationObserver: remove JS bubbles when Shiny renders real content
+      var outputDiv = document.getElementById(msg.output_id);
+      if (outputDiv && !outputDiv._bubbleObserver) {
+        outputDiv._bubbleObserver = true;
+        var obs = new MutationObserver(function() {
+          obs.disconnect();
+          outputDiv._bubbleObserver = false;
+          ['js_user_bubble', 'js_typing_bubble'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+          });
+        });
+        obs.observe(outputDiv, { childList: true, subtree: true });
+      }
+    }
+  });
 "));
 
 chatUI <- function(id) {
@@ -71,16 +109,68 @@ chatUI <- function(id) {
             '</div>';
           container.appendChild(typing);
           container.scrollTop = container.scrollHeight;
+
+          // 3. One-shot MutationObserver: remove JS bubbles when Shiny renders real content
+          var outputDiv = document.getElementById('%s');
+          if (outputDiv && !outputDiv._bubbleObserver) {
+            outputDiv._bubbleObserver = true;
+            var obs = new MutationObserver(function() {
+              obs.disconnect();
+              outputDiv._bubbleObserver = false;
+              ['js_user_bubble', 'js_typing_bubble'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el && el.parentNode) el.parentNode.removeChild(el);
+              });
+            });
+            obs.observe(outputDiv, { childList: true, subtree: true });
+          }
         }
       }
     });
-  ", ns("chat_input"), ns("send_trigger"), ns("chat_container"))))
+  ", ns("chat_input"), ns("send_trigger"), ns("chat_container"), ns("chat_history_ui"))))
+
+  # MediaRecorder: hold to record, release to send — mouseup bound on document so
+  # releasing outside the button still stops recording correctly.
+  mic_js <- tags$script(HTML(sprintf("
+    (function() {
+      var mediaRecorder, audioChunks = [];
+
+      $(document).on('mousedown', '#%s', function(e) {
+        e.preventDefault();
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = function(e) { audioChunks.push(e.data); };
+          mediaRecorder.onstop = function() {
+            var blob = new Blob(audioChunks, { type: 'audio/webm' });
+            var reader = new FileReader();
+            reader.onloadend = function() {
+              var b64 = reader.result.split(',')[1];
+              Shiny.setInputValue('%s', b64, { priority: 'event' });
+            };
+            reader.readAsDataURL(blob);
+            stream.getTracks().forEach(function(t) { t.stop(); });
+          };
+          mediaRecorder.start();
+          $('#%s').addClass('recording').attr('title', 'Release to send');
+
+          $(document).one('mouseup', function() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+              mediaRecorder.stop();
+              $('#%s').removeClass('recording').attr('title', 'Hold to talk');
+            }
+          });
+        });
+      });
+    })();
+  ", ns("mic_btn"), ns("whisper_audio"), ns("mic_btn"), ns("mic_btn"))))
 
   # Outer div is a flex column — grows to fill leftover sidebar height after upload inputs
   div(
     class = "chat-module",
     chat_scroll_js,
     enter_to_send_js,
+    mic_js,
 
     # Scrollable chat history — grows to fill all available space
     div(
@@ -98,7 +188,9 @@ chatUI <- function(id) {
         placeholder = "Ask about your data... (Enter to send, Shift+Enter for newline)",
         rows        = 2,
         width       = "100%"
-      )
+      ),
+      actionButton(ns("mic_btn"), label = NULL, icon = icon("microphone"),
+                   class = "mic-btn", title = "Hold to talk")
     )
   )
 }
@@ -110,11 +202,34 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     # ---- State ----
     # api_messages: completed turns in OpenAI {role, content} format
     # display_history: list of {user_msg, parsed} for UI rendering
-    api_messages    <- reactiveVal(list())
-    display_history <- reactiveVal(list())
-    plot_code       <- reactiveVal(NULL)
-    plot_title      <- reactiveVal(NULL)
-    sheet_code      <- reactiveVal(NULL)
+    # pending_sheet_*: holds sheet code awaiting user approval
+    api_messages        <- reactiveVal(list())
+    display_history     <- reactiveVal(list())
+    plot_code           <- reactiveVal(NULL)
+    plot_title          <- reactiveVal(NULL)
+    sheet_code          <- reactiveVal(NULL)
+    pending_sheet_code  <- reactiveVal(NULL)
+    pending_sheet_index <- reactiveVal(NULL)
+
+    # ---- Voice input handler ----
+    # Receives base64 webm audio, transcribes via Whisper, fires auto_send in JS
+    observeEvent(input$whisper_audio, {
+      req(input$whisper_audio)
+      transcript <- tryCatch(
+        whisper_transcribe(input$whisper_audio, api_key),
+        error = function(e) {
+          showNotification(paste("Whisper error:", e$message), type = "error", duration = 6)
+          ""
+        }
+      )
+      req(nchar(trimws(transcript)) > 0)
+      session$sendCustomMessage("auto_send", list(
+        send_trigger_id = ns("send_trigger"),
+        text            = transcript,
+        container_id    = ns("chat_container"),
+        output_id       = ns("chat_history_ui")
+      ))
+    })
 
     # ---- Send handler ----
     # input$send_trigger carries the query text (set by JS before clearing the textarea)
@@ -147,8 +262,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Remove JS-injected user bubble + typing dots now that Shiny will render the real content
-      session$sendCustomMessage("remove_js_chat_bubbles", TRUE)
+      # 5. MutationObserver in JS handles removal of JS bubbles when Shiny renders real content
       req(gpt_result)
 
       # 6. Route by response type
@@ -197,7 +311,10 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         }
 
       } else if (type == "sheet" && nchar(trimws(code)) > 0) {
-        sheet_code(code)
+        # Mark pending — Run/Dismiss buttons rendered in chat bubble before eval
+        gpt_result$sheet_status <- "pending"
+        pending_sheet_code(code)
+        pending_sheet_index(length(display_history()))
       }
 
       # 7. Append completed user + assistant turns to api_messages
@@ -214,6 +331,38 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       display_history(disp2)
 
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
+    })
+
+    # ---- Sheet approval handlers ----
+    observeEvent(input$run_sheet, {
+      code <- pending_sheet_code()
+      req(code)
+
+      # 1. Fire sheet evaluation
+      sheet_code(code)
+
+      # 2. Mark history entry as run
+      disp <- display_history()
+      idx  <- pending_sheet_index()
+      if (!is.null(idx) && idx >= 1L && idx <= length(disp)) {
+        disp[[idx]]$parsed$sheet_status <- "run"
+        display_history(disp)
+      }
+
+      # 3. Clear pending state
+      pending_sheet_code(NULL)
+      pending_sheet_index(NULL)
+    })
+
+    observeEvent(input$dismiss_sheet, {
+      disp <- display_history()
+      idx  <- pending_sheet_index()
+      if (!is.null(idx) && idx >= 1L && idx <= length(disp)) {
+        disp[[idx]]$parsed$sheet_status <- "dismissed"
+        display_history(disp)
+      }
+      pending_sheet_code(NULL)
+      pending_sheet_index(NULL)
     })
 
     # ---- Render chat history ----
@@ -258,12 +407,33 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
           )
         } else NULL
 
+        # Run/Dismiss buttons for pending sheets; status label after action
+        sheet_actions <- if (type == "sheet") {
+          status <- resp$sheet_status %||% ""
+          if (status == "pending") {
+            div(
+              style = "margin-top: 8px; display: flex; gap: 6px;",
+              actionButton(ns("run_sheet"),     tagList(icon("play"),  " Run"),
+                           class = "btn btn-sm btn-success"),
+              actionButton(ns("dismiss_sheet"), tagList(icon("times"), " Dismiss"),
+                           class = "btn btn-sm btn-secondary")
+            )
+          } else if (status == "run") {
+            div(style = "margin-top: 6px; font-size: 0.78rem; color: #6bcb77;",
+                icon("check"), " Sheet generated")
+          } else if (status == "dismissed") {
+            div(style = "margin-top: 6px; font-size: 0.78rem; color: #888;",
+                icon("times"), " Dismissed")
+          } else NULL
+        } else NULL
+
         assistant_bubble <- div(
           class = "chat-bubble-row assistant-row",
           div(
             class = "chat-bubble assistant-bubble",
             shiny::markdown(msg),
-            code_block
+            code_block,
+            sheet_actions
           )
         )
 
