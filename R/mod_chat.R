@@ -202,11 +202,14 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
     # ---- State ----
     # api_messages: completed turns in OpenAI {role, content} format
     # display_history: list of {user_msg, parsed} for UI rendering
-    api_messages    <- reactiveVal(list())
-    display_history <- reactiveVal(list())
-    plot_code       <- reactiveVal(NULL)
-    plot_title      <- reactiveVal(NULL)
-    sheet_code      <- reactiveVal(NULL)
+    # pending_sheet_*: holds sheet code awaiting user approval
+    api_messages        <- reactiveVal(list())
+    display_history     <- reactiveVal(list())
+    plot_code           <- reactiveVal(NULL)
+    plot_title          <- reactiveVal(NULL)
+    sheet_code          <- reactiveVal(NULL)
+    pending_sheet_code  <- reactiveVal(NULL)
+    pending_sheet_index <- reactiveVal(NULL)
 
     # ---- Voice input handler ----
     # Receives base64 webm audio, transcribes via Whisper, fires auto_send in JS
@@ -308,7 +311,10 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         }
 
       } else if (type == "sheet" && nchar(trimws(code)) > 0) {
-        sheet_code(code)
+        # Mark pending — Run/Dismiss buttons rendered in chat bubble before eval
+        gpt_result$sheet_status <- "pending"
+        pending_sheet_code(code)
+        pending_sheet_index(length(display_history()))
       }
 
       # 7. Append completed user + assistant turns to api_messages
@@ -325,6 +331,38 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       display_history(disp2)
 
       session$sendCustomMessage("scroll_chat", ns("chat_container"))
+    })
+
+    # ---- Sheet approval handlers ----
+    observeEvent(input$run_sheet, {
+      code <- pending_sheet_code()
+      req(code)
+
+      # 1. Fire sheet evaluation
+      sheet_code(code)
+
+      # 2. Mark history entry as run
+      disp <- display_history()
+      idx  <- pending_sheet_index()
+      if (!is.null(idx) && idx >= 1L && idx <= length(disp)) {
+        disp[[idx]]$parsed$sheet_status <- "run"
+        display_history(disp)
+      }
+
+      # 3. Clear pending state
+      pending_sheet_code(NULL)
+      pending_sheet_index(NULL)
+    })
+
+    observeEvent(input$dismiss_sheet, {
+      disp <- display_history()
+      idx  <- pending_sheet_index()
+      if (!is.null(idx) && idx >= 1L && idx <= length(disp)) {
+        disp[[idx]]$parsed$sheet_status <- "dismissed"
+        display_history(disp)
+      }
+      pending_sheet_code(NULL)
+      pending_sheet_index(NULL)
     })
 
     # ---- Render chat history ----
@@ -369,12 +407,33 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
           )
         } else NULL
 
+        # Run/Dismiss buttons for pending sheets; status label after action
+        sheet_actions <- if (type == "sheet") {
+          status <- resp$sheet_status %||% ""
+          if (status == "pending") {
+            div(
+              style = "margin-top: 8px; display: flex; gap: 6px;",
+              actionButton(ns("run_sheet"),     tagList(icon("play"),  " Run"),
+                           class = "btn btn-sm btn-success"),
+              actionButton(ns("dismiss_sheet"), tagList(icon("times"), " Dismiss"),
+                           class = "btn btn-sm btn-secondary")
+            )
+          } else if (status == "run") {
+            div(style = "margin-top: 6px; font-size: 0.78rem; color: #6bcb77;",
+                icon("check"), " Sheet generated")
+          } else if (status == "dismissed") {
+            div(style = "margin-top: 6px; font-size: 0.78rem; color: #888;",
+                icon("times"), " Dismissed")
+          } else NULL
+        } else NULL
+
         assistant_bubble <- div(
           class = "chat-bubble-row assistant-row",
           div(
             class = "chat-bubble assistant-bubble",
             shiny::markdown(msg),
-            code_block
+            code_block,
+            sheet_actions
           )
         )
 
