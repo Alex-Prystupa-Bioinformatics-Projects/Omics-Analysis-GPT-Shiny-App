@@ -49,6 +49,21 @@ chat_scroll_js <- tags$script(HTML("
       typing.innerHTML = '<div class=\"chat-bubble assistant-bubble typing-bubble\"><div class=\"typing-indicator\"><span></span><span></span><span></span></div></div>';
       container.appendChild(typing);
       container.scrollTop = container.scrollHeight;
+
+      // One-shot MutationObserver: remove JS bubbles when Shiny renders real content
+      var outputDiv = document.getElementById(msg.output_id);
+      if (outputDiv && !outputDiv._bubbleObserver) {
+        outputDiv._bubbleObserver = true;
+        var obs = new MutationObserver(function() {
+          obs.disconnect();
+          outputDiv._bubbleObserver = false;
+          ['js_user_bubble', 'js_typing_bubble'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+          });
+        });
+        obs.observe(outputDiv, { childList: true, subtree: true });
+      }
     }
   });
 "));
@@ -94,10 +109,25 @@ chatUI <- function(id) {
             '</div>';
           container.appendChild(typing);
           container.scrollTop = container.scrollHeight;
+
+          // 3. One-shot MutationObserver: remove JS bubbles when Shiny renders real content
+          var outputDiv = document.getElementById('%s');
+          if (outputDiv && !outputDiv._bubbleObserver) {
+            outputDiv._bubbleObserver = true;
+            var obs = new MutationObserver(function() {
+              obs.disconnect();
+              outputDiv._bubbleObserver = false;
+              ['js_user_bubble', 'js_typing_bubble'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el && el.parentNode) el.parentNode.removeChild(el);
+              });
+            });
+            obs.observe(outputDiv, { childList: true, subtree: true });
+          }
         }
       }
     });
-  ", ns("chat_input"), ns("send_trigger"), ns("chat_container"))))
+  ", ns("chat_input"), ns("send_trigger"), ns("chat_container"), ns("chat_history_ui"))))
 
   # MediaRecorder: hold to record, release to send — mouseup bound on document so
   # releasing outside the button still stops recording correctly.
@@ -193,7 +223,8 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
       session$sendCustomMessage("auto_send", list(
         send_trigger_id = ns("send_trigger"),
         text            = transcript,
-        container_id    = ns("chat_container")
+        container_id    = ns("chat_container"),
+        output_id       = ns("chat_history_ui")
       ))
     })
 
@@ -228,8 +259,7 @@ chatServer <- function(id, seu_obj, api_key, org_id) {
         NULL
       })
 
-      # 5. Remove JS-injected user bubble + typing dots now that Shiny will render the real content
-      session$sendCustomMessage("remove_js_chat_bubbles", TRUE)
+      # 5. MutationObserver in JS handles removal of JS bubbles when Shiny renders real content
       req(gpt_result)
 
       # 6. Route by response type

@@ -580,10 +580,23 @@ server <- function(input, output, session) {
     )
 
     if (exists("generated_df_list", envir = eval_env)) {
-      df_list <- get("generated_df_list", envir = eval_env)
-      reactive_df_list(df_list)
-      # Jump to first generated df (index 2, since MetaData is index 1)
-      table_index(2L)
+      new_dfs  <- get("generated_df_list", envir = eval_env)
+      existing <- reactive_df_list()
+
+      # Merge new entries into existing list — resolve name collisions with numeric suffix
+      for (nm in names(new_dfs)) {
+        candidate <- nm
+        suffix    <- 2L
+        while (candidate %in% names(existing)) {
+          candidate <- paste0(nm, "_", suffix)
+          suffix    <- suffix + 1L
+        }
+        existing[[candidate]] <- new_dfs[[nm]]
+      }
+
+      reactive_df_list(existing)
+      # Jump to the first newly added df
+      table_index(length(existing) + 1L - length(new_dfs) + 1L)
     }
   })
 
@@ -615,7 +628,7 @@ server <- function(input, output, session) {
     selected <- choices[i]
     if (selected == "MetaData") {
       req(seu_obj())
-      DT::datatable(seu_obj()@meta.data, options = list(scrollX = TRUE, pageLength = 15))
+      DT::datatable(seu_obj()@meta.data[1:100, ], options = list(scrollX = TRUE, pageLength = 15))
     } else {
       df <- reactive_df_list()[[selected]]
       req(df)
