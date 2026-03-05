@@ -8,10 +8,14 @@ An interactive Shiny dashboard for exploring fully processed Seurat objects usin
 
 - Single unified chatbot that knows when to talk, plot, or produce a data table
 - Automatically generates and renders Seurat/ggplot visualizations based on natural language prompts
-- Runs DE analysis and other tabular outputs on request
+- Sheet code (DE, summaries, etc.) requires explicit **Run / Dismiss** approval before executing — re-prompt if the code isn't what you wanted
+- Generated sheets accumulate across queries rather than overwriting — navigate all results via the table panel
+- Plot history with prev/next navigation — all generated plots are preserved in session
+- Voice dictation via hold-to-talk mic button (Whisper API transcription)
 - Collapsible code blocks so you can inspect the generated R code
-- Drag-to-resize sidebar and panel layout
-- Download plots as PDF and tables as CSV
+- When plot code fails, shows the error alongside the code and asks GPT to explain what went wrong
+- Drag-to-resize sidebar and vertical panel divider
+- Download plots as PDF (custom dimensions) and tables as CSV
 - Supports standard single-cell, spatial, and multiome Seurat objects
 
 ---
